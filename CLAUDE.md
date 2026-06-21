@@ -79,12 +79,14 @@ The code reads top-to-bottom as a pipeline; sections are marked with banner comm
   where there is actually open corridor; the figure shape is `inHumanoid(u,v)` masked.
 
 - **Game loop / objective.** `loop()` drives everything. Win = reaching the deterministic
-  `exitCell` (computed by `computeExitCell`, rendered as a green beacon). Lose = the
-  **hunt**: walking too straight grows `straightWalkTimer` past `huntThreshold()` →
-  `startHunt()`; the player must bank enough turning (`huntTurnAccum` vs
-  `huntTurnNeeded`) before the countdown to shake it, else `finishRun(false)`.
-  `runOver` freezes input/physics while an end overlay is up. `restartRun()` reseeds and
-  resets all of this.
+  `exitCell` (computed by `computeExitCell`, rendered as a green beacon). Two ways to
+  lose, both via `finishRun(false)`: (1) the **stalker touches you** (`updateStalker`,
+  `d<1.6`) — instant death; (2) the **hunt**: walking too straight grows
+  `straightWalkTimer` past `huntThreshold()` → `startHunt()`, and you must bank enough
+  turning (`huntTurnAccum` vs `huntTurnNeeded`) before the countdown to shake it.
+  `runOver` freezes input/physics while an end overlay is up; `paused` (toggled when the
+  Esc pause menu opens/closes) early-returns `loop()` to freeze the sim. `restartRun()`
+  reseeds and resets all of this.
 
 ## Conventions
 

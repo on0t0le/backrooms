@@ -61,14 +61,15 @@ the blackout beat is a deliberate, short, temporary deviation from the otherwise
     not solving a labyrinth.
 - **The stalker:** an entity that appears at the edges and **advances toward you
   whether or not you're looking at it** — facing it no longer makes it vanish, it
-  just keeps closing the distance. If it reaches you it lunges into a full hunt. (A
-  short grace period at the start of each run lets you get your bearings first.)
-- **The hunt:** triggered by the stalker closing in, or by walking in a straight line
-  too long. A red warning closes in with a countdown — keep **changing direction** to
-  accumulate enough turning and shake it. If the countdown runs out it lunges to
-  point-blank with a scream and you lose.
-- **Pause / restart:** `Esc` opens a pause menu (Resume / Restart Run) showing time
-  survived and distance walked. Win and lose both show an end screen with stats and a
+  just keeps closing the distance. **Letting it touch you (or walking into it) is
+  instant death** — don't approach it. (A short grace period at the start of each run
+  lets you get your bearings first.)
+- **The hunt:** triggered by walking in a straight line too long. A red warning closes
+  in with a countdown — keep **changing direction** to accumulate enough turning and
+  shake it. If the countdown runs out it lunges to point-blank with a scream and you
+  lose.
+- **Pause / restart:** `Esc` opens a pause menu (Resume / Restart Run) that **freezes
+  the game** and shows time survived and distance walked. Win and lose both show an end screen with stats and a
   Play Again button. **Every restart generates a brand-new maze** (fresh seed, new
   layout, new exit location).
 

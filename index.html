@@ -324,6 +324,7 @@ let runStartTime = performance.now();
 let caught = false;   // lost: an entity reached you
 let escaped = false;  // won: reached the exit
 let runOver = false;  // freezes input/physics while an end overlay is up
+let paused = false;   // freezes the sim while the pause menu is open
 (function loadSave(){
   try{
     const raw = localStorage.getItem('backrooms_save');
@@ -437,8 +438,8 @@ document.addEventListener('pointerlockchange', ()=>{
   // Esc (or any external unlock) frees the mouse and opens the menu - never
   // re-lock automatically, so the cursor can always reach browser chrome.
   if (gameStarted && !runOver){
-    if (pointerLocked) pausedScreen.classList.add('hidden');
-    else { refreshPausedStats(); pausedScreen.classList.remove('hidden'); }
+    if (pointerLocked){ pausedScreen.classList.add('hidden'); paused=false; }
+    else { paused=true; refreshPausedStats(); pausedScreen.classList.remove('hidden'); }
   }
 });
 startScreen.addEventListener('click', ()=>{
@@ -452,6 +453,7 @@ startScreen.addEventListener('click', ()=>{
 });
 document.getElementById('resumeBtn').addEventListener('click', ()=>{
   pausedScreen.classList.add('hidden');
+  paused = false;
   screenCanvas.requestPointerLock();
 });
 document.getElementById('restartBtn').addEventListener('click', restartRun);
@@ -467,7 +469,7 @@ function restartRun(){
   lightStates.clear();
   player.x = 1.5; player.y = 1.5; player.angle = 0; player.flashlight = false;
   distanceWalked = 0;
-  caught = false; escaped = false; runOver = false;
+  caught = false; escaped = false; runOver = false; paused = false;
   runStartTime = performance.now();
   // reset event/hunt scheduler
   eventActive = false; eventCooldownUntil = 0; nextEventAt = performance.now()+4000;
@@ -1211,20 +1213,14 @@ function huntThreshold(){
   // changing direction. escalation() (~1 early, ~6.7 late) shortens it further.
   return Math.max(6, 12 - escalation()*2);
 }
-function startHunt(origin){
+function startHunt(){
   huntActive = true;
   huntTimeLeft = 7.5;
   huntTurnAccum = 0;
   huntTurnNeeded = 2.4; // ~140 degrees of cumulative turning to lose it
-  if (origin){
-    // contact hunt: the hunter takes over exactly where the stalker was, so it
-    // never looks like the thing you walked toward just vanished
-    huntEntity = { x: origin.x, y: origin.y };
-  } else {
-    // ambient hunt: spawn behind the player so turning around reveals it
-    const a = player.angle + Math.PI;
-    huntEntity = { x: player.x + Math.cos(a)*5.5, y: player.y + Math.sin(a)*5.5 };
-  }
+  // spawn behind the player so turning around reveals it
+  const a = player.angle + Math.PI;
+  huntEntity = { x: player.x + Math.cos(a)*5.5, y: player.y + Math.sin(a)*5.5 };
   straightWalkTimer = 0;
   huntWarnEl.classList.add('on');
   huntTextEl.textContent = "SOMETHING'S COMING — CHANGE DIRECTION";
@@ -1311,13 +1307,11 @@ function updateStalker(dt){
   stalker.x += (dx/d)*0.75*dt;
   stalker.y += (dy/d)*0.75*dt;
   if (frameClock%45===0) playBreath();
-  // making contact ALWAYS lunges into a full hunt — approaching it is the worst move,
-  // never a free dismiss, even right after a previous hunt
-  if (d<2.6){
-    const origin = {x:stalker.x, y:stalker.y};
+  // touching the stalker is instant death — it grabs you, screams, run over
+  if (d<1.6){
     stalker=null;
-    huntCooldownUntil = 0;   // contact overrides the hunt cooldown
-    startHunt(origin);       // hunter continues from where the stalker stood
+    playScream();
+    finishRun(false);
   }
 }
 function drawStalker(){
@@ -1419,6 +1413,10 @@ function loop(){
   const dt = Math.min(0.05, (now-lastT)/1000);
   lastT = now;
   frameClock++;
+
+  // pause menu freezes the whole sim — no movement, events, stalker or hunt tick.
+  // lastT is kept current above so dt doesn't jump when you resume.
+  if (paused){ requestAnimationFrame(loop); return; }
 
   updatePlayer(dt);
   if (frameClock % 20 === 0) refreshNearbyLights(player.x, player.y);
