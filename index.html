@@ -372,22 +372,27 @@ function computeExitCell(){
   // spiral out over street-grid cells from spawn; first cell past a min
   // distance that clears a deterministic rarity threshold becomes the exit.
   const sx = Math.round(player.x), sy = Math.round(player.y);
-  const MIN_DIST = 40, MAX_R = 240;
-  let best = null;
+  const MIN_DIST = 70, MAX_R = 400;
+  let best = null, fallback = null;
+  // Expand in rings; step the perimeter one cell at a time so candidates actually
+  // land on street lines (gx%8==0 || gy%8==0) regardless of the player's offset —
+  // stepping by STREET_SPACING here would miss the lattice entirely.
   for (let r=STREET_SPACING; r<=MAX_R && !best; r+=STREET_SPACING){
-    for (let a=-r; a<=r && !best; a+=STREET_SPACING){
+    for (let a=-r; a<=r && !best; a++){
       const cands = [ [sx+a, sy-r], [sx+a, sy+r], [sx-r, sy+a], [sx+r, sy+a] ];
       for (const [gx,gy] of cands){
         if (!isStreet(gx,gy)) continue;
-        if (cellIsWall(gx,gy)) continue;
+        if (cellIsWall(gx,gy)) continue;       // exit is always on an open street cell
         const d = Math.hypot(gx-sx, gy-sy);
         if (d < MIN_DIST) continue;
+        // first open street cell past MIN_DIST is the safety net (never a wall)
+        if (!fallback) fallback = {gx, gy, x:gx+0.5, y:gy+0.5, d};
         if (hash2(gx,gy,777) < 0.02){ best = {gx, gy, x:gx+0.5, y:gy+0.5, d}; break; }
       }
     }
   }
-  // guaranteed fallback so an exit always exists
-  exitCell = best || {gx:sx+MIN_DIST, gy:sy, x:sx+MIN_DIST+0.5, y:sy+0.5, d:MIN_DIST};
+  // best (rare cell) preferred; fallback is a guaranteed open street cell past MIN_DIST
+  exitCell = best || fallback || {gx:sx, gy:sy, x:sx+0.5, y:sy+0.5, d:0};
 }
 
 const keys = {};
@@ -1272,7 +1277,7 @@ function spawnStalker(){
   for (const o of [Math.PI, Math.PI*0.6, -Math.PI*0.6, Math.PI*0.35, -Math.PI*0.35]){
     const a=player.angle+o+(Math.random()-0.5)*0.4;
     const p=visiblePoint(a, 7+Math.random()*4, 4.0);
-    if (p){ stalker={x:p.x,y:p.y}; playWhisper(); return; }
+    if (p && !cellIsWall(Math.floor(p.x), Math.floor(p.y))){ stalker={x:p.x,y:p.y}; playWhisper(); return; }
   }
 }
 function updateStalker(dt){
@@ -1289,8 +1294,10 @@ function updateStalker(dt){
   // of vanishing when you turn to face it
   const dx=player.x-stalker.x, dy=player.y-stalker.y;
   const d=Math.hypot(dx,dy)||1;
-  stalker.x += (dx/d)*0.75*dt;
-  stalker.y += (dy/d)*0.75*dt;
+  // home toward the player but never step into a wall (slide per-axis instead)
+  const nx = stalker.x + (dx/d)*0.75*dt, ny = stalker.y + (dy/d)*0.75*dt;
+  if (!cellIsWall(Math.floor(nx), Math.floor(stalker.y))) stalker.x = nx;
+  if (!cellIsWall(Math.floor(stalker.x), Math.floor(ny))) stalker.y = ny;
   if (frameClock%45===0) playBreath();
   // touching the stalker is instant death — it grabs you, screams, run over
   if (d<1.6){
