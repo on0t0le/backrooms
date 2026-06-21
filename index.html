@@ -1211,6 +1211,9 @@ function startHunt(){
   setBuzz(1);
 }
 function endHunt(shaken){
+  // clear the inline opacity updateHunt sets, otherwise the red vignette lingers
+  // (the CSS class alone can't override an inline style) — e.g. across a restart
+  huntWarnEl.style.opacity = '';
   if (!huntActive){ huntWarnEl.classList.remove('on'); huntTextEl.classList.remove('on'); return; }
   huntActive = false;
   huntEntity = null;
