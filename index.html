@@ -1207,9 +1207,9 @@ let huntCooldownUntil = 0;   // no new hunt before this time
 const huntEntityColor = makeSilhouetteColor([6,2,3]);
 
 function huntThreshold(){
-  // shorter fuse than before so walking straight is genuinely risky; the stalker
-  // also triggers hunts directly, so this is the secondary path into a chase
-  return Math.max(12, 26 - escalation()*5);
+  // short fuse: walking in a straight line is genuinely risky and forces you to keep
+  // changing direction. escalation() (~1 early, ~6.7 late) shortens it further.
+  return Math.max(6, 12 - escalation()*2);
 }
 function startHunt(){
   huntActive = true;
@@ -1305,11 +1305,12 @@ function updateStalker(dt){
   stalker.x += (dx/d)*0.75*dt;
   stalker.y += (dy/d)*0.75*dt;
   if (frameClock%45===0) playBreath();
-  // if it reaches you unseen, it lunges into a full hunt
+  // making contact ALWAYS lunges into a full hunt — approaching it is the worst move,
+  // never a free dismiss, even right after a previous hunt
   if (d<2.6){
     stalker=null;
-    if (now>=huntCooldownUntil) startHunt();
-    else stalkerCooldownUntil = now + 4000;
+    huntCooldownUntil = 0;   // contact overrides the hunt cooldown
+    startHunt();
   }
 }
 function drawStalker(){
