@@ -28,6 +28,10 @@
     display:flex;align-items:center;justify-content:center;flex-direction:column;z-index:100;cursor:pointer;}
   #start h1{font-size:2.4em;letter-spacing:6px;font-weight:400;text-shadow:0 0 20px #665;margin-bottom:0.2em;}
   #start p{opacity:0.6;font-size:0.9em;}
+  #paused{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);color:#c9c2a0;
+    display:flex;align-items:center;justify-content:center;flex-direction:column;z-index:90;cursor:pointer;}
+  #paused h2{font-size:1.6em;letter-spacing:4px;font-weight:400;margin-bottom:0.3em;}
+  #paused p{opacity:0.7;font-size:0.85em;}
   .hidden{display:none !important;}
 </style>
 </head>
@@ -45,6 +49,10 @@
 <div id="start">
   <h1>THE BACKROOMS</h1>
   <p>click to enter &mdash; WASD/arrows move &middot; mouse look &middot; F flashlight &middot; Esc release</p>
+</div>
+<div id="paused" class="hidden">
+  <h2>PAUSED</h2>
+  <p>click to resume &mdash; mouse is free, use Esc anytime to release it again</p>
 </div>
 <script>
 (function(){
@@ -306,8 +314,10 @@ window.addEventListener('keydown', e=>{
 window.addEventListener('keyup', e=>{ keys[e.code]=false; });
 
 let pointerLocked=false;
+let gameStarted=false;
 const screenCanvas = document.getElementById('screen');
 const startScreen = document.getElementById('start');
+const pausedScreen = document.getElementById('paused');
 
 function toggleFlashlight(){
   player.flashlight = !player.flashlight;
@@ -321,14 +331,19 @@ document.addEventListener('mousemove', e=>{
 });
 document.addEventListener('pointerlockchange', ()=>{
   pointerLocked = document.pointerLockElement === screenCanvas;
+  // Esc (or any external unlock) just frees the mouse - never re-lock
+  // automatically. Only the explicit "paused" overlay click re-requests it,
+  // so the cursor can always reach the browser chrome after Esc.
+  if (gameStarted) pausedScreen.classList.toggle('hidden', pointerLocked);
 });
 startScreen.addEventListener('click', ()=>{
   startScreen.classList.add('hidden');
+  gameStarted = true;
   screenCanvas.requestPointerLock();
   initAudio();
 });
-screenCanvas.addEventListener('click', ()=>{
-  if (!pointerLocked) screenCanvas.requestPointerLock();
+pausedScreen.addEventListener('click', ()=>{
+  screenCanvas.requestPointerLock();
 });
 
 let lastTurnDelta = 0;
