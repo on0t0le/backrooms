@@ -23,8 +23,8 @@ doc used to drive the implementation). Summary of what's implemented:
   traversable. Distant chunks are evicted with an LRU cache.
 - Procedural textures (mono-yellow wallpaper with damp stains/seams, damp carpet,
   ceiling tiles) generated into typed arrays at load time — no image assets.
-- Controls: WASD/arrows to move, mouse look (Pointer Lock API), `F` toggles a
-  flashlight, `Esc` releases the pointer lock.
+- Controls: WASD **or** arrow keys to move/strafe, mouse look (Pointer Lock API),
+  `F` toggles a flashlight, `Esc` opens the pause menu (and frees the mouse).
 
 ### Atmosphere
 - Dynamic fluorescent lighting with inverse-square falloff; lights are on by default
@@ -42,6 +42,22 @@ behind the camera, light flickers, a single light going dark behind you, a glimp
 silhouette down a corridor, rare shadow entities, spatial anomalies (a hallway that
 wasn't there before), a once-per-session distant scream, and an extremely rare
 (<1%/minute) jumpscare. Frequency and intensity slowly escalate the longer you walk.
+
+### Objective & game loop
+- **Goal:** find the **exit** — one rare, deterministic tile per world that glows as a
+  green beacon column, visible down open corridors. Step onto it to escape and win.
+- **Navigation aid:** a minimal HUD (top-left) shows the straight-line distance and
+  rough heading (ahead / behind / left / right) to the exit beacon.
+- **The hunt (rare but intense):** walk in a straight line too long and *something*
+  starts hunting you from behind. A red warning closes in and a short countdown
+  starts — keep **changing direction** to accumulate enough turning and shake it. If
+  the countdown runs out, it lunges to point-blank with a scream and you lose. After
+  a hunt resolves there's a long cooldown, so it stays an occasional spike of dread,
+  not a constant chase.
+- **Pause / restart:** `Esc` opens a pause menu (Resume / Restart Run) showing time
+  survived and distance walked. Win and lose both show an end screen with stats and a
+  Play Again button. **Every restart generates a brand-new maze** (fresh seed, new
+  layout, new exit location).
 
 ## Running locally
 
@@ -74,9 +90,11 @@ docs/architecture.md             # original design brief (gitignored, local-only
 
 ## Ideas for future improvement
 
-- Fix the horror-event silhouette/shadow sprites: they currently render as flat
-  blocky rectangles instead of soft, ambiguous silhouettes (see `projectSprite` /
-  `silhouetteColor` in `index.html`).
+- Soften the horror sprites further: they now render as a solid humanoid outline
+  (head/shoulders/torso via `inHumanoid` in `index.html`), which is clearly visible;
+  a soft alpha falloff at the edges would make them more ambiguous and dreamlike.
+- Add a directional audio cue or visual tell so the hunt's origin is clearer before
+  the entity is on top of you; tune `huntThreshold`/`huntTurnNeeded` from playtesting.
 - Per-pixel (rather than per-column/per-row) lighting for floor/ceiling would remove
   the remaining banding at close range, at a performance cost.
 - Tune chunk/light density and event pacing based on real playtesting — current

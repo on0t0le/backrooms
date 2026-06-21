@@ -28,10 +28,29 @@
     display:flex;align-items:center;justify-content:center;flex-direction:column;z-index:100;cursor:pointer;}
   #start h1{font-size:2.4em;letter-spacing:6px;font-weight:400;text-shadow:0 0 20px #665;margin-bottom:0.2em;}
   #start p{opacity:0.6;font-size:0.9em;}
-  #paused{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);color:#c9c2a0;
-    display:flex;align-items:center;justify-content:center;flex-direction:column;z-index:90;cursor:pointer;}
-  #paused h2{font-size:1.6em;letter-spacing:4px;font-weight:400;margin-bottom:0.3em;}
-  #paused p{opacity:0.7;font-size:0.85em;}
+  #paused{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);color:#c9c2a0;
+    display:flex;align-items:center;justify-content:center;flex-direction:column;z-index:90;}
+  #paused h2{font-size:1.6em;letter-spacing:4px;font-weight:400;margin-bottom:0.2em;}
+  #paused .stats{opacity:0.8;font-size:0.85em;margin-bottom:1.4em;text-align:center;line-height:1.6;}
+  #paused .hint{opacity:0.45;font-size:0.72em;margin-top:1.4em;max-width:30em;text-align:center;}
+  #end{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.82);
+    display:flex;align-items:center;justify-content:center;flex-direction:column;z-index:95;}
+  #end h2{font-size:2em;letter-spacing:5px;font-weight:400;margin-bottom:0.2em;}
+  #end .stats{opacity:0.8;font-size:0.9em;margin-bottom:1.6em;text-align:center;line-height:1.6;}
+  #end.win{color:#d8e6b0;} #end.win h2{text-shadow:0 0 24px #6a8;}
+  #end.lose{color:#e0b0a0;} #end.lose h2{text-shadow:0 0 24px #844;}
+  .btn{font-family:inherit;font-size:0.95em;letter-spacing:2px;color:#0a0a08;background:#c9c2a0;
+    border:none;padding:0.7em 2em;margin:0.4em;cursor:pointer;border-radius:2px;text-transform:uppercase;}
+  .btn:hover{background:#e6dfbe;}
+  .btn.ghost{background:transparent;color:#c9c2a0;border:1px solid rgba(201,194,160,0.5);}
+  .btn.ghost:hover{background:rgba(201,194,160,0.12);}
+  #huntwarn{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:8;opacity:0;
+    box-shadow:inset 0 0 28vmax 8vmax rgba(120,0,0,0.55);transition:opacity 0.25s ease;}
+  #huntwarn.on{opacity:1;}
+  #hunttext{position:absolute;top:14%;left:0;width:100%;text-align:center;color:#e8c0b0;
+    font-size:1.15em;letter-spacing:3px;text-shadow:0 0 8px #000;opacity:0;transition:opacity 0.3s ease;
+    pointer-events:none;z-index:11;}
+  #hunttext.on{opacity:1;}
   .hidden{display:none !important;}
 </style>
 </head>
@@ -41,6 +60,8 @@
   <div id="vignette"></div>
   <div id="scanlines"></div>
   <canvas id="grain"></canvas>
+  <div id="huntwarn"></div>
+  <div id="hunttext"></div>
   <div id="crosshair"></div>
   <div id="subtitle"></div>
   <div id="hud"></div>
@@ -48,11 +69,20 @@
 <div id="flash"></div>
 <div id="start">
   <h1>THE BACKROOMS</h1>
-  <p>click to enter &mdash; WASD/arrows move &middot; mouse look &middot; F flashlight &middot; Esc release</p>
+  <p>click to enter &mdash; WASD/arrows move &middot; mouse look &middot; F flashlight &middot; Esc menu</p>
+  <p style="margin-top:1.2em;opacity:0.45;max-width:34em;text-align:center;line-height:1.6">find the marked exit to escape &middot; if something starts hunting you, keep changing direction to lose it</p>
 </div>
 <div id="paused" class="hidden">
   <h2>PAUSED</h2>
-  <p>click to resume &mdash; mouse is free, use Esc anytime to release it again</p>
+  <div class="stats" id="pausedStats"></div>
+  <button class="btn" id="resumeBtn">Resume</button>
+  <button class="btn ghost" id="restartBtn">Restart Run</button>
+  <div class="hint">mouse is free &mdash; press Esc again anytime to release it</div>
+</div>
+<div id="end" class="hidden">
+  <h2 id="endTitle"></h2>
+  <div class="stats" id="endStats"></div>
+  <button class="btn" id="againBtn">Play Again</button>
 </div>
 <script>
 (function(){
@@ -61,7 +91,7 @@
 /* ============================================================
    UTIL / PRNG / NOISE
    ============================================================ */
-const SEED = (function(){
+let SEED = (function(){
   const s = localStorage.getItem('backrooms_seed');
   if (s) return parseInt(s,10);
   const v = (Math.random()*2147483647)|0;
@@ -290,6 +320,10 @@ function lightContribution(wx, wy){
    PLAYER / CONTROLS
    ============================================================ */
 const player = { x:1.5, y:1.5, angle:0, flashlight:false };
+let runStartTime = performance.now();
+let caught = false;   // lost: an entity reached you
+let escaped = false;  // won: reached the exit
+let runOver = false;  // freezes input/physics while an end overlay is up
 (function loadSave(){
   try{
     const raw = localStorage.getItem('backrooms_save');
@@ -302,9 +336,34 @@ const player = { x:1.5, y:1.5, angle:0, flashlight:false };
   }catch(e){}
 })();
 function saveGame(){
+  if (runOver) return;
   try{ localStorage.setItem('backrooms_save', JSON.stringify({x:player.x,y:player.y,angle:player.angle})); }catch(e){}
 }
 setInterval(saveGame, 3000);
+
+/* ---- EXIT cell: one rare, deterministic escape tile per world ---- */
+let exitCell = null;
+function computeExitCell(){
+  // spiral out over street-grid cells from spawn; first cell past a min
+  // distance that clears a deterministic rarity threshold becomes the exit.
+  const sx = Math.round(player.x), sy = Math.round(player.y);
+  const MIN_DIST = 40, MAX_R = 240;
+  let best = null;
+  for (let r=STREET_SPACING; r<=MAX_R && !best; r+=STREET_SPACING){
+    for (let a=-r; a<=r && !best; a+=STREET_SPACING){
+      const cands = [ [sx+a, sy-r], [sx+a, sy+r], [sx-r, sy+a], [sx+r, sy+a] ];
+      for (const [gx,gy] of cands){
+        if (!isStreet(gx,gy)) continue;
+        if (cellIsWall(gx,gy)) continue;
+        const d = Math.hypot(gx-sx, gy-sy);
+        if (d < MIN_DIST) continue;
+        if (hash2(gx,gy,777) < 0.0035){ best = {gx, gy, x:gx+0.5, y:gy+0.5, d}; break; }
+      }
+    }
+  }
+  // guaranteed fallback so an exit always exists
+  exitCell = best || {gx:sx+MIN_DIST, gy:sy, x:sx+MIN_DIST+0.5, y:sy+0.5, d:MIN_DIST};
+}
 
 const keys = {};
 window.addEventListener('keydown', e=>{
@@ -318,6 +377,18 @@ let gameStarted=false;
 const screenCanvas = document.getElementById('screen');
 const startScreen = document.getElementById('start');
 const pausedScreen = document.getElementById('paused');
+const endScreen = document.getElementById('end');
+
+function fmtTime(ms){
+  const s = Math.max(0, Math.floor(ms/1000));
+  const m = Math.floor(s/60);
+  return m+':'+String(s%60).padStart(2,'0');
+}
+function refreshPausedStats(){
+  document.getElementById('pausedStats').innerHTML =
+    'time survived: '+fmtTime(performance.now()-runStartTime)+'<br>'+
+    'distance walked: '+Math.floor(distanceWalked)+' m';
+}
 
 function toggleFlashlight(){
   player.flashlight = !player.flashlight;
@@ -331,20 +402,67 @@ document.addEventListener('mousemove', e=>{
 });
 document.addEventListener('pointerlockchange', ()=>{
   pointerLocked = document.pointerLockElement === screenCanvas;
-  // Esc (or any external unlock) just frees the mouse - never re-lock
-  // automatically. Only the explicit "paused" overlay click re-requests it,
-  // so the cursor can always reach the browser chrome after Esc.
-  if (gameStarted) pausedScreen.classList.toggle('hidden', pointerLocked);
+  // Esc (or any external unlock) frees the mouse and opens the menu - never
+  // re-lock automatically, so the cursor can always reach browser chrome.
+  if (gameStarted && !runOver){
+    if (pointerLocked) pausedScreen.classList.add('hidden');
+    else { refreshPausedStats(); pausedScreen.classList.remove('hidden'); }
+  }
 });
 startScreen.addEventListener('click', ()=>{
   startScreen.classList.add('hidden');
   gameStarted = true;
+  runStartTime = performance.now();
+  computeExitCell();
   screenCanvas.requestPointerLock();
   initAudio();
 });
-pausedScreen.addEventListener('click', ()=>{
+document.getElementById('resumeBtn').addEventListener('click', ()=>{
+  pausedScreen.classList.add('hidden');
   screenCanvas.requestPointerLock();
 });
+document.getElementById('restartBtn').addEventListener('click', restartRun);
+document.getElementById('againBtn').addEventListener('click', restartRun);
+
+function restartRun(){
+  // brand-new world: fresh seed, fresh layout, fresh exit
+  SEED = (Math.random()*2147483647)|0;
+  try{ localStorage.setItem('backrooms_seed', SEED); }catch(e){}
+  try{ localStorage.removeItem('backrooms_save'); }catch(e){}
+  chunkCache.clear();
+  overrides.clear();
+  lightStates.clear();
+  player.x = 1.5; player.y = 1.5; player.angle = 0; player.flashlight = false;
+  distanceWalked = 0;
+  caught = false; escaped = false; runOver = false;
+  runStartTime = performance.now();
+  // reset event/hunt scheduler
+  eventActive = false; eventCooldownUntil = 0; nextEventAt = performance.now()+4000;
+  firstSilhouetteDone = false; screamUsed = false;
+  endHunt(); straightWalkTimer = 0; huntCooldownUntil = 0;
+  activeSprites.length = 0;
+  refreshNearbyLights(player.x, player.y);
+  computeExitCell();
+  endScreen.classList.add('hidden');
+  pausedScreen.classList.add('hidden');
+  screenCanvas.requestPointerLock();
+}
+
+function finishRun(win){
+  if (runOver) return;
+  runOver = true;
+  escaped = win; caught = !win;
+  endHunt();
+  if (document.pointerLockElement) document.exitPointerLock();
+  pausedScreen.classList.add('hidden');
+  endScreen.classList.remove('hidden');
+  endScreen.classList.toggle('win', win);
+  endScreen.classList.toggle('lose', !win);
+  document.getElementById('endTitle').textContent = win ? 'YOU FOUND A WAY OUT' : 'YOU DIDN’T MAKE IT';
+  document.getElementById('endStats').innerHTML =
+    'time survived: '+fmtTime(performance.now()-runStartTime)+'<br>'+
+    'distance walked: '+Math.floor(distanceWalked)+' m';
+}
 
 let lastTurnDelta = 0;
 let totalTurnSinceEvent = 0;
@@ -367,17 +485,18 @@ function moveAmount(dx,dy,dist){
 
 let distanceWalked = 0;
 let isWalking = false;
+let straightWalkTimer = 0;   // seconds of near-straight walking (feeds the hunt)
 function updatePlayer(dt){
+  if (runOver){ isWalking=false; lastTurnDelta=0; return; }
   const speed = 2.6 * dt;
   let mx=0,my=0;
   const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
   const perpX=-dirY, perpY=dirX;
+  // arrows mirror WASD: up/down = forward/back, left/right = strafe
   if (keys['KeyW']||keys['ArrowUp']){ mx+=dirX; my+=dirY; }
   if (keys['KeyS']||keys['ArrowDown']){ mx-=dirX; my-=dirY; }
-  if (keys['KeyA']){ mx-=perpX; my-=perpY; }
-  if (keys['KeyD']){ mx+=perpX; my+=perpY; }
-  if (keys['ArrowLeft']) player.angle -= 1.6*dt;
-  if (keys['ArrowRight']) player.angle += 1.6*dt;
+  if (keys['KeyA']||keys['ArrowLeft']){ mx-=perpX; my-=perpY; }
+  if (keys['KeyD']||keys['ArrowRight']){ mx+=perpX; my+=perpY; }
   const len = Math.hypot(mx,my);
   isWalking = len>0.01;
   if (isWalking){
@@ -385,7 +504,12 @@ function updatePlayer(dt){
     moveAmount(mx*speed, my*speed, speed);
     distanceWalked += speed;
   }
-  totalTurnSinceEvent += Math.abs(lastTurnDelta);
+  const turnedThisFrame = Math.abs(lastTurnDelta);
+  totalTurnSinceEvent += turnedThisFrame;
+  if (huntActive) huntTurnAccum += turnedThisFrame;
+  // straight-walk timer: grows while walking ~straight, resets on a real turn
+  if (turnedThisFrame > 0.05) straightWalkTimer = Math.max(0, straightWalkTimer - turnedThisFrame*6);
+  if (isWalking) straightWalkTimer += dt; else straightWalkTimer = Math.max(0, straightWalkTimer - dt*0.5);
   lastTurnDelta = 0;
 }
 
@@ -525,9 +649,14 @@ function renderFloorCeilingRow(y, drawBounds){
       const tp = tex[ty*TEX_SIZE+tx];
       let r=tp&0xFF,g=(tp>>8)&0xFF,b=(tp>>16)&0xFF;
       let col;
-      if (!isFloor && isLightCell(Math.floor(floorX), Math.floor(floorY))){
+      const cfx = Math.floor(floorX), cfy = Math.floor(floorY);
+      if (exitCell && cfx===exitCell.gx && cfy===exitCell.gy){
+        // the exit tile glows green-white on both floor and ceiling, visible from afar
+        const pulse = 0.7 + 0.3*Math.sin(performance.now()*0.004);
+        col = [lerp(r,120,pulse), lerp(g,255,pulse), lerp(b,150,pulse)];
+      } else if (!isFloor && isLightCell(cfx, cfy)){
         // emissive fluorescent tube fixture - glows bright white, ignores fog/distance darkening
-        const st = lightStateFor(Math.floor(floorX), Math.floor(floorY));
+        const st = lightStateFor(cfx, cfy);
         const glow = st.off ? 0.1 : st.flicker;
         r = lerp(r,255,glow*0.78); g = lerp(g,244,glow*0.78); b = lerp(b,190,glow*0.7);
         col = [r,g,b];
@@ -538,6 +667,33 @@ function renderFloorCeilingRow(y, drawBounds){
     }
     floorX+=stepX; floorY+=stepY;
   }
+}
+
+/* ---- cast a ray from the player and return open distance to first wall ---- */
+function castRayDist(angle, maxd){
+  maxd = maxd||MAX_DIST;
+  const rdx=Math.cos(angle), rdy=Math.sin(angle);
+  let mapX=Math.floor(player.x), mapY=Math.floor(player.y);
+  const ddX=Math.abs(1/rdx), ddY=Math.abs(1/rdy);
+  let stepX,stepY,sdX,sdY;
+  if (rdx<0){ stepX=-1; sdX=(player.x-mapX)*ddX; } else { stepX=1; sdX=(mapX+1-player.x)*ddX; }
+  if (rdy<0){ stepY=-1; sdY=(player.y-mapY)*ddY; } else { stepY=1; sdY=(mapY+1-player.y)*ddY; }
+  let side=0;
+  for (let i=0;i<64;i++){
+    if (sdX<sdY){ sdX+=ddX; mapX+=stepX; side=0; } else { sdY+=ddY; mapY+=stepY; side=1; }
+    if (cellIsWall(mapX,mapY)){
+      const d = side===0 ? (sdX-ddX) : (sdY-ddY);
+      return Math.min(maxd, d);
+    }
+  }
+  return maxd;
+}
+// place a sprite at a visible spot along a bearing: just short of the nearest wall
+function visiblePoint(angle, desired, minVis){
+  const open = castRayDist(angle, MAX_DIST);
+  const d = Math.min(desired, open*0.8);
+  if (d < (minVis||2.5)) return null; // corridor too short to show anything
+  return { x: player.x+Math.cos(angle)*d, y: player.y+Math.sin(angle)*d, d };
 }
 
 /* ---- sprite projection (silhouettes / shadow entities / jumpscare) ---- */
@@ -569,10 +725,29 @@ function projectSprite(wx, wy, heightFrac, widthFrac, vOffset, drawCol){
   }
 }
 
+function exitColor(u,v,dist){
+  // bright green glowing column, soft horizontal edges, brighter core
+  const edge = Math.min(u, 1-u);
+  if (edge < 0.04) return null;
+  const pulse = 0.78 + 0.22*Math.sin(performance.now()*0.004 + v*3);
+  const core = 1 - Math.abs(u-0.5)*1.4;
+  const g = 200 + 55*pulse;
+  const r = 70 + 90*core*pulse;
+  const b = 110 + 80*core*pulse;
+  return [r, g, b];
+}
+function drawExit(){
+  if (!exitCell) return;
+  // a tall glowing marker pillar at the exit tile, drawn like a sprite (occluded by walls)
+  projectSprite(exitCell.x, exitCell.y, 2.2, 0.7, -0.1, exitColor);
+}
+
 function renderFrame(){
   for (let x=0;x<BW;x++) castColumn(x);
   for (let y=0;y<BH;y++) renderFloorCeilingRow(y, null);
+  drawExit();
   drawActiveSprites();
+  drawHunt();
   rctx.putImageData(imgData, 0, 0);
   sctx.clearRect(0,0,screenCanvas.width,screenCanvas.height);
   sctx.drawImage(renderCanvas, 0, 0, screenCanvas.width, screenCanvas.height);
@@ -813,31 +988,45 @@ function eventSingleLightOff(){
   setTimeout(()=>{ st.off=false; clearInterval(checker); endEvent(); }, 12000);
 }
 
-function silhouetteColor(u,v,dist){
-  if (v<0.05 || v>0.98) return null;
-  const edge = Math.min(u, 1-u);
-  const a = edge<0.12 ? edge/0.12 : 1;
-  if (a<0.15) return null;
-  const dark = 8;
-  return [dark, dark, dark+3];
+// solid humanoid mask over the billboard: head + shoulders + tapering torso.
+// returns true when (u,v) falls inside the body outline.
+function inHumanoid(u,v){
+  if (v < 0.0 || v > 1.0) return false;
+  const cx = u - 0.5;             // -0.5..0.5 across width
+  if (v < 0.18){                  // head
+    const hr = 0.12;
+    const hy = (v-0.09)/0.18;
+    return (cx*cx)/(hr*hr) + (hy*hy) < 1.0;
+  }
+  if (v < 0.30){ return Math.abs(cx) < 0.30; }   // shoulders
+  // torso + legs, tapering slightly downward
+  const w = 0.30 - (v-0.30)*0.12;
+  return Math.abs(cx) < w;
 }
+function makeSilhouetteColor(rgb){
+  return function(u,v,dist){
+    if (!inHumanoid(u,v)) return null;
+    return rgb;
+  };
+}
+const silhouetteColor = makeSilhouetteColor([10,10,14]);
 function eventSilhouette(glimpseOnly){
-  const dist = 9+Math.random()*5;
-  const p = aheadStreetPoint(dist);
-  const dur = glimpseOnly ? 350 : (900+Math.random()*900);
+  const p = visiblePoint(player.angle, 9+Math.random()*5, 3.0);
+  if (!p){ endEvent(); return; }
+  const dur = glimpseOnly ? 450 : (1100+Math.random()*900);
   showSubtitle(glimpseOnly ? "...did something just move?" : "something stands there. watching.", glimpseOnly?1500:3000);
-  addSprite({x:p.x,y:p.y, until:performance.now()+dur, heightFrac:1.6, widthFrac:0.5, vOffset:0.05, colorFn:silhouetteColor});
+  addSprite({x:p.x,y:p.y, until:performance.now()+dur, heightFrac:1.7, widthFrac:0.6, vOffset:0.06, colorFn:silhouetteColor});
   firstSilhouetteDone = true;
   setTimeout(endEvent, dur+50);
 }
 
 function eventShadowEntityFar(){
-  const dist = 13+Math.random()*4;
-  const p = aheadStreetPoint(dist);
-  const dur = 600+Math.random()*500;
+  const p = visiblePoint(player.angle, 13+Math.random()*4, 5.0);
+  if (!p){ endEvent(); return; }
+  const dur = 700+Math.random()*500;
   showSubtitle("a shape, far down the hall.", 2500);
-  addSprite({x:p.x,y:p.y, until:performance.now()+dur, heightFrac:1.4, widthFrac:0.4, vOffset:0.1,
-    colorFn:(u,v)=>{ if (v<0.1||v>0.95) return null; return [3,3,4]; }});
+  addSprite({x:p.x,y:p.y, until:performance.now()+dur, heightFrac:1.5, widthFrac:0.5, vOffset:0.06,
+    colorFn:makeSilhouetteColor([4,4,6])});
   setTimeout(endEvent, dur+50);
 }
 
@@ -869,10 +1058,11 @@ function eventScream(){
   setTimeout(endEvent, 2500);
 }
 
+const jumpscareColor = (u,v)=>{ if (!inHumanoid(u,v)) return null; return [180,18,18]; };
 function eventJumpscare(){
   const p = aheadStreetPoint(1.4);
-  addSprite({x:p.x,y:p.y, until:performance.now()+260, heightFrac:2.4, widthFrac:1.0, vOffset:0.0,
-    colorFn:(u,v)=>{ const e=Math.min(u,1-u); if (e<0.4) return null; return [200,30,30]; }});
+  addSprite({x:p.x,y:p.y, until:performance.now()+260, heightFrac:2.6, widthFrac:1.2, vOffset:0.0,
+    colorFn:jumpscareColor});
   playJumpscareStinger();
   const flashEl = document.getElementById('flash');
   flashEl.style.opacity = 0.9;
@@ -884,6 +1074,85 @@ function eventJumpscare(){
 function endEvent(){
   eventActive = false;
   eventCooldownUntil = performance.now() + 3000 + Math.random()*4000;
+}
+
+/* ============================================================
+   HUNT / CHASE  — rare but intense; shake it by changing direction
+   ============================================================ */
+const huntWarnEl = document.getElementById('huntwarn');
+const huntTextEl = document.getElementById('hunttext');
+let huntActive = false;
+let huntEntity = null;       // {x,y} world position, homes toward player
+let huntTimeLeft = 0;        // seconds before it catches you
+let huntTurnAccum = 0;       // radians of turning banked during this hunt
+let huntTurnNeeded = 0;      // radians required to shake it
+let huntCooldownUntil = 0;   // no new hunt before this time
+const huntEntityColor = makeSilhouetteColor([6,2,3]);
+
+function huntThreshold(){
+  // long fuse: ~32s of near-straight walking early, easing down with escalation
+  return Math.max(18, 34 - escalation()*6);
+}
+function startHunt(){
+  huntActive = true;
+  huntTimeLeft = 7.5;
+  huntTurnAccum = 0;
+  huntTurnNeeded = 2.4; // ~140 degrees of cumulative turning to lose it
+  // spawn behind the player so turning around reveals it
+  const a = player.angle + Math.PI;
+  huntEntity = { x: player.x + Math.cos(a)*5.5, y: player.y + Math.sin(a)*5.5 };
+  straightWalkTimer = 0;
+  huntWarnEl.classList.add('on');
+  huntTextEl.textContent = "SOMETHING'S COMING — CHANGE DIRECTION";
+  huntTextEl.classList.add('on');
+  playGroan();
+  setBuzz(1);
+}
+function endHunt(shaken){
+  if (!huntActive){ huntWarnEl.classList.remove('on'); huntTextEl.classList.remove('on'); return; }
+  huntActive = false;
+  huntEntity = null;
+  huntWarnEl.classList.remove('on');
+  huntTextEl.classList.remove('on');
+  setBuzz(0);
+  huntCooldownUntil = performance.now() + 25000 + Math.random()*20000;
+  straightWalkTimer = 0;
+  if (shaken) showSubtitle("...you lost it. for now.", 3000);
+}
+function updateHunt(dt){
+  if (!huntActive){
+    if (runOver) return;
+    if (performance.now() < huntCooldownUntil) return;
+    if (eventActive) return;
+    if (straightWalkTimer > huntThreshold()) startHunt();
+    return;
+  }
+  // (turning is banked into huntTurnAccum inside updatePlayer)
+  // entity homes toward the player; turning lets you open distance
+  const dx = player.x-huntEntity.x, dy = player.y-huntEntity.y;
+  const dd = Math.hypot(dx,dy)||1;
+  const chase = 1.9*dt;
+  huntEntity.x += (dx/dd)*chase;
+  huntEntity.y += (dy/dd)*chase;
+  huntTimeLeft -= dt;
+  // closer + less time => more intense red vignette
+  const intensity = Math.max(0.25, 1 - huntTimeLeft/7.5);
+  huntWarnEl.style.opacity = (0.5 + 0.5*intensity).toFixed(2);
+  // footstep pursuit audio
+  if (frameClock % 14 === 0) playFootstep((Math.random()-0.5)*0.8, Math.min(8, dd), 0.4);
+  if (huntTurnAccum >= huntTurnNeeded){ endHunt(true); return; }
+  if (huntTimeLeft <= 0){
+    // caught: lunge to point blank, scream, lose
+    huntEntity.x = player.x + Math.cos(player.angle)*1.0;
+    huntEntity.y = player.y + Math.sin(player.angle)*1.0;
+    eventJumpscare();
+    playScream();
+    finishRun(false);
+  }
+}
+function drawHunt(){
+  if (!huntActive || !huntEntity) return;
+  projectSprite(huntEntity.x, huntEntity.y, 1.9, 0.7, 0.05, huntEntityColor);
 }
 
 function maybeTriggerSpecialFirstSilhouette(){
@@ -904,6 +1173,7 @@ function escalation(){
 
 function tickEvents(){
   const now = performance.now();
+  if (huntActive) return; // hunt is the sole focus while active
   maybeTriggerSpecialFirstSilhouette();
   if (eventActive) return;
   if (now < eventCooldownUntil) return;
@@ -951,6 +1221,25 @@ function drawGrain(){
 }
 
 /* ============================================================
+   HUD: rough heading to the exit beacon
+   ============================================================ */
+const hudEl = document.getElementById('hud');
+function updateHud(){
+  if (!exitCell || runOver){ hudEl.textContent=''; return; }
+  const dx = exitCell.x-player.x, dy = exitCell.y-player.y;
+  const dist = Math.hypot(dx,dy);
+  let rel = Math.atan2(dy,dx) - player.angle;
+  while (rel > Math.PI) rel -= 2*Math.PI;
+  while (rel < -Math.PI) rel += 2*Math.PI;
+  let arrow;
+  if (Math.abs(rel) < 0.39) arrow='^ ahead';
+  else if (Math.abs(rel) > Math.PI-0.39) arrow='v behind';
+  else if (rel > 0) arrow='> right';
+  else arrow='< left';
+  hudEl.textContent = 'exit  '+Math.round(dist)+'m  '+arrow;
+}
+
+/* ============================================================
    MAIN LOOP
    ============================================================ */
 let lastT = performance.now();
@@ -969,6 +1258,13 @@ function loop(){
   updateListenerOrientation();
   if (window.__whineGain) window.__whineGain.gain.value = 0.0018+Math.random()*0.001;
 
+  // win check: stepping onto the exit tile escapes the backrooms
+  if (gameStarted && !runOver && exitCell &&
+      Math.floor(player.x)===exitCell.gx && Math.floor(player.y)===exitCell.gy){
+    finishRun(true);
+  }
+  if (gameStarted) updateHunt(dt);
+  if (gameStarted && frameClock % 10 === 0) updateHud();
   tickEvents();
   renderFrame();
   if (frameClock % 4 === 0) drawGrain();
