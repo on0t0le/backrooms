@@ -390,38 +390,6 @@ function computeExitCell(){
   exitCell = best || {gx:sx+MIN_DIST, gy:sy, x:sx+MIN_DIST+0.5, y:sy+0.5, d:MIN_DIST};
 }
 
-/* ---- TRAIL: a route to the exit, but only the next few cells ever glow ---- */
-// Built along the guaranteed-open street lattice; stored as cell-key -> order
-// index from the player. The renderer only lights the lowest indices (the next
-// stretch ahead), so it guides without laying out the whole solution.
-const TRAIL_WINDOW = 14;          // how many cells ahead light up
-let trailSet = new Map();
-let trailKeyCell = '';
-function pushLine(x0,y0,x1,y1,arr){
-  // axis-aligned Manhattan walk (x first, then y), inclusive of both ends
-  let x=x0, y=y0;
-  arr.push([x,y]);
-  while (x!==x1){ x += x1>x?1:-1; arr.push([x,y]); }
-  while (y!==y1){ y += y1>y?1:-1; arr.push([x,y]); }
-}
-function computeTrail(){
-  trailSet = new Map();
-  if (!exitCell) return;
-  const S = STREET_SPACING;
-  const px=Math.round(player.x), py=Math.round(player.y);
-  const ex=exitCell.gx, ey=exitCell.gy;
-  // nearest street intersections to player and to exit (multiples of S are streets)
-  const ix=Math.round(px/S)*S, iy=Math.round(py/S)*S;
-  const jx=Math.round(ex/S)*S, jy=Math.round(ey/S)*S;
-  const arr=[];
-  pushLine(px,py, ix,iy, arr);   // hop onto the nearest street intersection
-  pushLine(ix,iy, ix,jy, arr);   // travel the vertical street
-  pushLine(ix,jy, jx,jy, arr);   // travel the horizontal street
-  pushLine(jx,jy, ex,ey, arr);   // step into the exit
-  let idx=0;
-  for (const [x,y] of arr){ const k=x+','+y; if (!trailSet.has(k)) trailSet.set(k, idx); idx++; }
-}
-
 const keys = {};
 window.addEventListener('keydown', e=>{
   keys[e.code]=true;
@@ -472,7 +440,6 @@ startScreen.addEventListener('click', ()=>{
   runStartTime = performance.now();
   ensureOpenSpawn();
   computeExitCell();
-  computeTrail();
   screenCanvas.requestPointerLock();
   initAudio();
 });
@@ -505,7 +472,6 @@ function restartRun(){
   activeSprites.length = 0;
   refreshNearbyLights(player.x, player.y);
   computeExitCell();
-  trailKeyCell = ''; computeTrail();
   endScreen.classList.add('hidden');
   pausedScreen.classList.add('hidden');
   screenCanvas.requestPointerLock();
@@ -714,20 +680,10 @@ function renderFloorCeilingRow(y, drawBounds){
       let r=tp&0xFF,g=(tp>>8)&0xFF,b=(tp>>16)&0xFF;
       let col;
       const cfx = Math.floor(floorX), cfy = Math.floor(floorY);
-      let trailIdx;
       if (exitCell && cfx===exitCell.gx && cfy===exitCell.gy){
         // the exit tile glows green-white on both floor and ceiling, visible from afar
         const pulse = 0.7 + 0.3*Math.sin(performance.now()*0.004);
         col = [lerp(r,120,pulse), lerp(g,255,pulse), lerp(b,150,pulse)];
-      } else if (isFloor && !huntActive && trailSet.size &&
-                 (trailIdx=trailSet.get(cfx+','+cfy))!==undefined && trailIdx<=TRAIL_WINDOW){
-        // breadcrumb glow on the floor — only the next few cells, fading out, and it
-        // goes dark while you're being hunted (fear makes you lose the path)
-        const fade = 1 - trailIdx/TRAIL_WINDOW;
-        const flow = 0.5 + 0.5*Math.sin(performance.now()*0.006 - trailIdx*0.6);
-        const a = fade*flow*0.45;
-        const base = shadeColor(r,g,b,totalLight,rowDist);
-        col = [lerp(base[0],170,a), lerp(base[1],45,a), lerp(base[2],40,a)];
       } else if (!isFloor && isLightCell(cfx, cfy)){
         // emissive fluorescent tube fixture - glows bright white, ignores fog/distance darkening
         const st = lightStateFor(cfx, cfy);
@@ -1457,10 +1413,6 @@ function loop(){
   if (gameStarted && !runOver && exitCell &&
       Math.floor(player.x)===exitCell.gx && Math.floor(player.y)===exitCell.gy){
     finishRun(true);
-  }
-  if (gameStarted && !runOver){
-    const ck = Math.round(player.x)+','+Math.round(player.y);
-    if (ck!==trailKeyCell){ trailKeyCell=ck; computeTrail(); }
   }
   if (gameStarted) updateStalker(dt);
   if (gameStarted) updateHunt(dt);

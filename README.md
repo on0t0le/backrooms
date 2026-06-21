@@ -50,13 +50,10 @@ the blackout beat is a deliberate, short, temporary deviation from the otherwise
 - **Goal:** find the **exit** — one rare, deterministic tile per world that glows as a
   green beacon column. Step onto it to escape and win.
 - **Wayfinding (guides without trivializing):**
-  - A faint **red breadcrumb trail** glows on the floor along the open street grid
-    toward the exit, but only the next ~14 cells light up (fading at the far end), and
-    it **goes dark while you're being hunted** — you get "which way now," not the whole
-    solution.
+  - A minimal HUD (top-left) shows distance to the exit + a rough heading arrow —
+    the only persistent navigation cue.
   - The exit's **pillar and sky-beam** only reveal once you're within ~6 cells — a
     short-range "you found it" cue, not a map marker that gives away the route.
-  - A minimal HUD (top-left) shows distance + rough heading as a backup.
   - The exit is 40+ tiles away through the maze; difficulty is *surviving the walk*,
     not solving a labyrinth.
 - **The stalker:** an entity that appears at the edges and **advances toward you
