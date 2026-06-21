@@ -50,18 +50,18 @@ the blackout beat is a deliberate, short, temporary deviation from the otherwise
 - **Goal:** find the **exit** — one rare, deterministic tile per world that glows as a
   green beacon column. Step onto it to escape and win.
 - **Wayfinding (guides without trivializing):**
-  - A **teal breadcrumb trail** glows on the floor along the open street grid toward
-    the exit, but only the next ~14 cells light up (fading at the far end), and it
-    **goes dark while you're being hunted** — you get "which way now," not the whole
+  - A faint **red breadcrumb trail** glows on the floor along the open street grid
+    toward the exit, but only the next ~14 cells light up (fading at the far end), and
+    it **goes dark while you're being hunted** — you get "which way now," not the whole
     solution.
-  - A soft **green sky-beam** rises above the exit, drawn over the walls, readable
-    from a distance and brighter as you approach — long-range orientation only.
+  - The exit's **pillar and sky-beam** only reveal once you're within ~6 cells — a
+    short-range "you found it" cue, not a map marker that gives away the route.
   - A minimal HUD (top-left) shows distance + rough heading as a backup.
   - The exit is 40+ tiles away through the maze; difficulty is *surviving the walk*,
     not solving a labyrinth.
-- **The stalker:** an entity that is never quite there — it appears at the edges,
-  creeps closer while you're not looking, and **vanishes the instant you face it**,
-  then reappears elsewhere. If it reaches you unseen it lunges into a full hunt. (A
+- **The stalker:** an entity that appears at the edges and **advances toward you
+  whether or not you're looking at it** — facing it no longer makes it vanish, it
+  just keeps closing the distance. If it reaches you it lunges into a full hunt. (A
   short grace period at the start of each run lets you get your bearings first.)
 - **The hunt:** triggered by the stalker closing in, or by walking in a straight line
   too long. A red warning closes in with a countdown — keep **changing direction** to

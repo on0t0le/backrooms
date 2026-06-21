@@ -60,8 +60,11 @@ The code reads top-to-bottom as a pipeline; sections are marked with banner comm
 - **Rendering** writes into a 480×270 `Uint32Array` (`pix32`) upscaled to the screen
   canvas with `image-rendering: pixelated`. Per frame `renderFrame()`:
   `castColumn` (DDA wall raycast, fills `zbuffer`) → `renderFloorCeilingRow` (per-row
-  floor/ceiling cast, also where emissive light fixtures and the exit tile glow) →
-  `drawExit` → `drawActiveSprites` → `drawHunt`. All billboards go through
+  floor/ceiling cast, also where emissive light fixtures, the exit tile glow, and the
+  red breadcrumb trail are drawn) → `drawSkybeam` → `drawExit` → `drawActiveSprites` →
+  `drawStalker` → `drawHunt`. The exit pillar (`drawExit`) and `drawSkybeam` are
+  proximity-gated by `EXIT_NEAR` (~6 cells) — they stay hidden until you're nearly on
+  the exit, so they orient without revealing the route. All billboards go through
   `projectSprite`, which respects `zbuffer` for occlusion. Lighting is `AMBIENT` +
   `lightContribution` (inverse-square over `nearbyLights`) + flashlight, blended to
   warm-yellow fog in `shadeColor` — tuned to **always stay lit, never to white/black**.

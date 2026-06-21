@@ -697,9 +697,9 @@ function renderFloorCeilingRow(y, drawBounds){
         // goes dark while you're being hunted (fear makes you lose the path)
         const fade = 1 - trailIdx/TRAIL_WINDOW;
         const flow = 0.5 + 0.5*Math.sin(performance.now()*0.006 - trailIdx*0.6);
-        const a = fade*flow*0.8;
+        const a = fade*flow*0.45;
         const base = shadeColor(r,g,b,totalLight,rowDist);
-        col = [lerp(base[0],55,a), lerp(base[1],215,a), lerp(base[2],205,a)];
+        col = [lerp(base[0],170,a), lerp(base[1],45,a), lerp(base[2],40,a)];
       } else if (!isFloor && isLightCell(cfx, cfy)){
         // emissive fluorescent tube fixture - glows bright white, ignores fog/distance darkening
         const st = lightStateFor(cfx, cfy);
@@ -782,8 +782,12 @@ function exitColor(u,v,dist){
   const b = 110 + 80*core*pulse;
   return [r, g, b];
 }
+const EXIT_NEAR = 6.0; // pillar + skybeam only reveal within this many cells
 function drawExit(){
   if (!exitCell) return;
+  // only show the pillar once you're nearly on top of the exit, so it doesn't give
+  // away the route across the whole maze
+  if (Math.hypot(exitCell.x-player.x, exitCell.y-player.y) > EXIT_NEAR) return;
   // a tall glowing marker pillar at the exit tile, drawn like a sprite (occluded by walls)
   projectSprite(exitCell.x, exitCell.y, 2.2, 0.7, -0.1, exitColor);
 }
@@ -796,6 +800,7 @@ function drawSkybeam(){
   const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
   const planeX=-dirY*Math.tan(HALF_FOV), planeY=dirX*Math.tan(HALF_FOV);
   const relX=exitCell.x-player.x, relY=exitCell.y-player.y;
+  if (Math.hypot(relX, relY) > EXIT_NEAR) return; // only reveal when very close
   const invDet=1/(planeX*dirY-dirX*planeY);
   const tx=invDet*(dirY*relX-dirX*relY);
   const ty=invDet*(-planeY*relX+planeX*relY);
@@ -1275,13 +1280,6 @@ let stalker = null;              // {x,y} world position
 let stalkerCooldownUntil = 0;
 const stalkerColor = makeSilhouetteColor([8,8,12]);
 
-function playerSeesPoint(wx,wy){
-  const dx=wx-player.x, dy=wy-player.y;
-  const d=Math.hypot(dx,dy)||1;
-  const dot=(dx/d)*Math.cos(player.angle)+(dy/d)*Math.sin(player.angle);
-  if (dot<0.95) return false;                  // not roughly centered in view
-  return castRayDist(Math.atan2(dy,dx), MAX_DIST) >= d-0.5; // clear line of sight
-}
 function spawnStalker(){
   // try behind, then to the sides, at a visible medium distance
   for (const o of [Math.PI, Math.PI*0.6, -Math.PI*0.6, Math.PI*0.35, -Math.PI*0.35]){
@@ -1300,15 +1298,8 @@ function updateStalker(dt){
     stalkerCooldownUntil = now + 4000 + Math.random()*5000;
     return;
   }
-  // look right at it and it's gone
-  if (playerSeesPoint(stalker.x, stalker.y)){
-    stalker=null;
-    playWhisper();
-    stalkerCooldownUntil = now + 3000 + Math.random()*4000;
-    showSubtitle("...it was there. now it isn't.", 1800);
-    return;
-  }
-  // creeps closer while you're not looking
+  // homes in on the player whether or not it's being watched — it advances instead
+  // of vanishing when you turn to face it
   const dx=player.x-stalker.x, dy=player.y-stalker.y;
   const d=Math.hypot(dx,dy)||1;
   stalker.x += (dx/d)*0.75*dt;
