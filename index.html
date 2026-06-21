@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>THE BACKROOMS</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html,body{margin:0;padding:0;background:#000;overflow:hidden;height:100%;width:100%;cursor:default;font-family:'Courier New',monospace;}
+  #screen{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh;image-rendering:pixelated;image-rendering:crisp-edges;background:#000;}
+  #overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:5;}
+  #vignette{position:absolute;top:0;left:0;width:100%;height:100%;
+    background:radial-gradient(ellipse at center, rgba(0,0,0,0) 35%, rgba(10,8,4,0.55) 85%, rgba(5,4,2,0.9) 100%);
+    pointer-events:none;}
+  #grain{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0.07;mix-blend-mode:overlay;pointer-events:none;}
+  #scanlines{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;
+    background:repeating-linear-gradient(to bottom, rgba(0,0,0,0.12) 0px, rgba(0,0,0,0.12) 1px, rgba(0,0,0,0) 2px, rgba(0,0,0,0) 3px);
+    mix-blend-mode:multiply;}
+  #chroma{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;
+    box-shadow: inset 0 0 0 100vmax rgba(0,0,0,0); }
+  #flash{position:absolute;top:0;left:0;width:100%;height:100%;background:#fff;opacity:0;pointer-events:none;z-index:50;}
+  #subtitle{position:absolute;bottom:8%;left:0;width:100%;text-align:center;color:#d8d2c0;
+    font-size:1.1em;letter-spacing:1px;text-shadow:0 0 6px #000,0 0 2px #000;opacity:0;
+    transition:opacity 0.8s ease;pointer-events:none;z-index:10;}
+  #crosshair{position:absolute;top:50%;left:50%;width:6px;height:6px;margin:-3px;border-radius:50%;
+    background:rgba(255,255,255,0.25);pointer-events:none;z-index:10;}
+  #hud{position:absolute;top:10px;left:10px;color:#998;font-size:11px;opacity:0.4;z-index:10;pointer-events:none;}
+  #start{position:absolute;top:0;left:0;width:100%;height:100%;background:#000;color:#c9c2a0;
+    display:flex;align-items:center;justify-content:center;flex-direction:column;z-index:100;cursor:pointer;}
+  #start h1{font-size:2.4em;letter-spacing:6px;font-weight:400;text-shadow:0 0 20px #665;margin-bottom:0.2em;}
+  #start p{opacity:0.6;font-size:0.9em;}
+  .hidden{display:none !important;}
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<div id="overlay">
+  <div id="vignette"></div>
+  <div id="scanlines"></div>
+  <canvas id="grain"></canvas>
+  <div id="crosshair"></div>
+  <div id="subtitle"></div>
+  <div id="hud"></div>
+</div>
+<div id="flash"></div>
+<div id="start">
+  <h1>THE BACKROOMS</h1>
+  <p>click to enter &mdash; WASD/arrows move &middot; mouse look &middot; F flashlight &middot; Esc release</p>
+</div>
+<script>
+(function(){
+"use strict";
+
+/* ============================================================
+   UTIL / PRNG / NOISE
+   ============================================================ */
+const SEED = (function(){
+  const s = localStorage.getItem('backrooms_seed');
+  if (s) return parseInt(s,10);
+  const v = (Math.random()*2147483647)|0;
+  localStorage.setItem('backrooms_seed', v);
+  return v;
+})();
+
+function hash2(x, y, salt){
+  let h = (x*374761393 + y*668265263 + (salt||0)*2654435761 + SEED*40503) | 0;
+  h = (h ^ (h >>> 13)) * 1274126177 | 0;
+  h = (h ^ (h >>> 16));
+  return ((h >>> 0) % 100000) / 100000;
+}
+function lerp(a,b,t){ return a+(b-a)*t; }
+function smooth(t){ return t*t*(3-2*t); }
+
+function valueNoise(x, y, salt){
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x-xi, yf = y-yi;
+  const v00 = hash2(xi,yi,salt), v10 = hash2(xi+1,yi,salt);
+  const v01 = hash2(xi,yi+1,salt), v11 = hash2(xi+1,yi+1,salt);
+  const u = smooth(xf), v = smooth(yf);
+  return lerp(lerp(v00,v10,u), lerp(v01,v11,u), v);
+}
+function fbm(x, y, salt, oct){
+  oct = oct||4;
+  let total=0, amp=0.5, freq=1, max=0;
+  for(let i=0;i<oct;i++){
+    total += valueNoise(x*freq, y*freq, salt) * amp;
+    max += amp;
+    amp *= 0.5; freq *= 2.07;
+  }
+  return total/max;
+}
+
+/* ============================================================
+   PROCEDURAL TEXTURES  (64x64, packed Uint32 RGBA, little-endian)
+   ============================================================ */
+const TEX_SIZE = 64;
+function packRGBA(r,g,b,a){ return (a<<24)|(b<<16)|(g<<8)|r; }
+
+function makeWallpaperTex(){
+  const buf = new Uint32Array(TEX_SIZE*TEX_SIZE);
+  for(let y=0;y<TEX_SIZE;y++){
+    for(let x=0;x<TEX_SIZE;x++){
+      // canonical Backrooms mono-yellow mustard wallpaper
+      let n = fbm(x*0.08, y*0.08, 11, 3);
+      let base = lerp(188, 208, n);
+      let r = base, g = base*0.87, b = base*0.42;
+      // vertical seams every 16px (faint)
+      if (x % 16 < 1) { r*=0.8; g*=0.8; b*=0.8; }
+      // subtle repeating diamond/chevron print, darker yellow ink
+      const motifX = x % 16, motifY = y % 16;
+      const dx = Math.abs(motifX-8), dy = Math.abs(motifY-8);
+      const diamond = dx+dy; // diamond outline distance
+      if (diamond>5 && diamond<7.5){
+        const inkN = hash2(Math.floor(x/16), Math.floor(y/16), 13);
+        const ink = 0.12 + inkN*0.06; // low contrast
+        r *= (1-ink*0.45); g *= (1-ink*0.45); b *= (1-ink*0.3);
+      }
+      // damp stains - subtle darker yellow-brown blotches, worse toward bottom
+      const stain = fbm(x*0.05+50, y*0.05+50, 22, 4);
+      const vBias = (y/TEX_SIZE);
+      if (stain*(0.5+vBias*0.6) > 0.62){
+        const sd = (stain-0.62)*1.6;
+        r *= (1-0.28*sd); g *= (1-0.3*sd); b *= (1-0.22*sd);
+      }
+      // very light grime
+      const sp = hash2(x,y,77);
+      if (sp>0.985){ r*=0.78; g*=0.78; b*=0.7; }
+      // baseboard band along the bottom of the texture
+      if (y > TEX_SIZE-6){
+        const bb = (y-(TEX_SIZE-6))/6;
+        r *= (1-0.4*bb); g *= (1-0.4*bb); b *= (1-0.4*bb);
+      }
+      buf[y*TEX_SIZE+x] = packRGBA(r|0,g|0,b|0,255);
+    }
+  }
+  return buf;
+}
+
+function makeCarpetTex(){
+  const buf = new Uint32Array(TEX_SIZE*TEX_SIZE);
+  for(let y=0;y<TEX_SIZE;y++){
+    for(let x=0;x<TEX_SIZE;x++){
+      // damp mono-yellow carpet, same hue as walls but darker/moist
+      let n = fbm(x*0.12,y*0.12,33,3);
+      let base = lerp(140,162,n);
+      let r = base, g = base*0.82, b = base*0.44;
+      // moist patches - slightly darker, sheen toward yellow-brown
+      const wet = fbm(x*0.06+9,y*0.06+9,44,4);
+      if (wet>0.56){ const wd=(wet-0.56)*1.6; r*=(1-0.22*wd); g*=(1-0.24*wd); b*=(1-0.18*wd); }
+      // subtle fiber speckle
+      const sp = hash2(x,y,88);
+      r=Math.max(0,Math.min(255,r+(sp-0.5)*10));
+      g=Math.max(0,Math.min(255,g+(sp-0.5)*8));
+      b=Math.max(0,Math.min(255,b+(sp-0.5)*4));
+      buf[y*TEX_SIZE+x] = packRGBA(r|0,g|0,b|0,255);
+    }
+  }
+  return buf;
+}
+
+function makeCeilingTex(){
+  const buf = new Uint32Array(TEX_SIZE*TEX_SIZE);
+  for(let y=0;y<TEX_SIZE;y++){
+    for(let x=0;x<TEX_SIZE;x++){
+      let base = 200;
+      // tile grid lines
+      const gx = x % 32, gy = y % 32;
+      let r=base, g=base*0.94, b=base*0.72;
+      if (gx<1 || gy<1){ r*=0.62; g*=0.62; b*=0.58; }
+      const stain = fbm(x*0.07+5,y*0.07+5,55,3);
+      if (stain>0.68){ const sd=(stain-0.68)*1.6; r*=(1-0.28*sd); g*=(1-0.3*sd); b*=(1-0.24*sd); }
+      const sp = hash2(x,y,99);
+      if (sp>0.99){ r*=0.7; g*=0.7; b*=0.65; }
+      buf[y*TEX_SIZE+x] = packRGBA(r|0,g|0,b|0,255);
+    }
+  }
+  return buf;
+}
+
+const TEX_WALL = makeWallpaperTex();
+const TEX_FLOOR = makeCarpetTex();
+const TEX_CEIL = makeCeilingTex();
+
+/* ============================================================
+   WORLD: infinite chunked grid with guaranteed street network
+   ============================================================ */
+const CHUNK = 16;
+const STREET_SPACING = 8;
+const chunkCache = new Map(); // key "cx,cy" -> {data:Uint8Array(256), last:number}
+const overrides = new Map(); // "gx,gy" -> {wall:bool, expires:number} for spatial anomalies
+let frameClock = 0;
+
+function isStreet(gx,gy){
+  return (((gx%STREET_SPACING)+STREET_SPACING)%STREET_SPACING===0) ||
+         (((gy%STREET_SPACING)+STREET_SPACING)%STREET_SPACING===0);
+}
+function rawIsWall(gx,gy){
+  if (isStreet(gx,gy)) return false;
+  const v = fbm(gx*0.16, gy*0.16, 3, 4);
+  return v > 0.5;
+}
+function isLightCell(gx,gy){
+  if (!isStreet(gx,gy)) return false;
+  return hash2(gx,gy,5) < 0.14;
+}
+function buildChunk(cx,cy){
+  const data = new Uint8Array(CHUNK*CHUNK);
+  for(let ly=0; ly<CHUNK; ly++){
+    for(let lx=0; lx<CHUNK; lx++){
+      const gx = cx*CHUNK+lx, gy = cy*CHUNK+ly;
+      data[ly*CHUNK+lx] = rawIsWall(gx,gy) ? 1 : 0;
+    }
+  }
+  return data;
+}
+const MAX_CHUNKS = 81;
+function getChunk(cx,cy){
+  const key = cx+','+cy;
+  let c = chunkCache.get(key);
+  if (!c){
+    c = { data: buildChunk(cx,cy), last: frameClock };
+    chunkCache.set(key, c);
+    if (chunkCache.size > MAX_CHUNKS){
+      let oldestKey=null, oldestT=Infinity;
+      for (const [k,v] of chunkCache){ if (v.last<oldestT){ oldestT=v.last; oldestKey=k; } }
+      if (oldestKey) chunkCache.delete(oldestKey);
+    }
+  } else c.last = frameClock;
+  return c.data;
+}
+function cellIsWall(gx,gy){
+  const ov = overrides.get(gx+','+gy);
+  if (ov){
+    if (ov.expires < performance.now()) overrides.delete(gx+','+gy);
+    else return ov.wall;
+  }
+  const cx = Math.floor(gx/CHUNK), cy = Math.floor(gy/CHUNK);
+  const lx = (((gx%CHUNK)+CHUNK)%CHUNK), ly = (((gy%CHUNK)+CHUNK)%CHUNK);
+  return getChunk(cx,cy)[ly*CHUNK+lx] === 1;
+}
+
+/* ============================================================
+   LIGHTS - dynamic list near player, with flicker / off state
+   ============================================================ */
+const lightStates = new Map(); // "gx,gy" -> {flicker:0..1, off:bool, offUntilLook:bool}
+let nearbyLights = [];
+function lightStateFor(gx,gy){
+  const key = gx+','+gy;
+  let s = lightStates.get(key);
+  if (!s){ s = {flicker:1, off:false, lookToRestore:false}; lightStates.set(key,s); }
+  return s;
+}
+function refreshNearbyLights(px,py){
+  const R = 14;
+  const cgx = Math.round(px), cgy = Math.round(py);
+  const out = [];
+  for(let dy=-R; dy<=R; dy++){
+    for(let dx=-R; dx<=R; dx++){
+      const gx=cgx+dx, gy=cgy+dy;
+      if (isLightCell(gx,gy)){
+        out.push({x:gx+0.5, y:gy+0.5, gx, gy});
+      }
+    }
+  }
+  nearbyLights = out;
+}
+
+function lightContribution(wx, wy){
+  let total = 0;
+  for(let i=0;i<nearbyLights.length;i++){
+    const L = nearbyLights[i];
+    const st = lightStateFor(L.gx,L.gy);
+    if (st.off) continue;
+    const dx = wx-L.x, dy = wy-L.y;
+    const d2 = dx*dx+dy*dy;
+    const falloff = 1.0/(1.0+d2*1.6);
+    total += falloff * 0.55 * st.flicker;
+  }
+  return total;
+}
+
+/* ============================================================
+   PLAYER / CONTROLS
+   ============================================================ */
+const player = { x:1.5, y:1.5, angle:0, flashlight:false };
+(function loadSave(){
+  try{
+    const raw = localStorage.getItem('backrooms_save');
+    if (raw){
+      const s = JSON.parse(raw);
+      if (typeof s.x==='number') player.x=s.x;
+      if (typeof s.y==='number') player.y=s.y;
+      if (typeof s.angle==='number') player.angle=s.angle;
+    }
+  }catch(e){}
+})();
+function saveGame(){
+  try{ localStorage.setItem('backrooms_save', JSON.stringify({x:player.x,y:player.y,angle:player.angle})); }catch(e){}
+}
+setInterval(saveGame, 3000);
+
+const keys = {};
+window.addEventListener('keydown', e=>{
+  keys[e.code]=true;
+  if (e.code==='KeyF') toggleFlashlight();
+});
+window.addEventListener('keyup', e=>{ keys[e.code]=false; });
+
+let pointerLocked=false;
+const screenCanvas = document.getElementById('screen');
+const startScreen = document.getElementById('start');
+
+function toggleFlashlight(){
+  player.flashlight = !player.flashlight;
+  audioFlashlightClick();
+}
+
+document.addEventListener('mousemove', e=>{
+  if (!pointerLocked) return;
+  player.angle += e.movementX * 0.0022;
+  lastTurnDelta = e.movementX*0.0022;
+});
+document.addEventListener('pointerlockchange', ()=>{
+  pointerLocked = document.pointerLockElement === screenCanvas;
+});
+startScreen.addEventListener('click', ()=>{
+  startScreen.classList.add('hidden');
+  screenCanvas.requestPointerLock();
+  initAudio();
+});
+screenCanvas.addEventListener('click', ()=>{
+  if (!pointerLocked) screenCanvas.requestPointerLock();
+});
+
+let lastTurnDelta = 0;
+let totalTurnSinceEvent = 0;
+
+function moveAmount(dx,dy,dist){
+  // try sliding collision against grid walls with small radius
+  const R = 0.22;
+  let nx = player.x + dx, ny = player.y;
+  if (!cellIsWall(Math.floor(nx+R*Math.sign(dx||1)), Math.floor(player.y)) &&
+      !cellIsWall(Math.floor(nx-R), Math.floor(ny-R)) && !cellIsWall(Math.floor(nx+R), Math.floor(ny+R)) &&
+      !cellIsWall(Math.floor(nx-R), Math.floor(ny+R)) && !cellIsWall(Math.floor(nx+R), Math.floor(ny-R))) {
+    player.x = nx;
+  }
+  nx = player.x; ny = player.y + dy;
+  if (!cellIsWall(Math.floor(nx-R), Math.floor(ny-R)) && !cellIsWall(Math.floor(nx+R), Math.floor(ny+R)) &&
+      !cellIsWall(Math.floor(nx-R), Math.floor(ny+R)) && !cellIsWall(Math.floor(nx+R), Math.floor(ny-R))) {
+    player.y = ny;
+  }
+}
+
+let distanceWalked = 0;
+let isWalking = false;
+function updatePlayer(dt){
+  const speed = 2.6 * dt;
+  let mx=0,my=0;
+  const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
+  const perpX=-dirY, perpY=dirX;
+  if (keys['KeyW']||keys['ArrowUp']){ mx+=dirX; my+=dirY; }
+  if (keys['KeyS']||keys['ArrowDown']){ mx-=dirX; my-=dirY; }
+  if (keys['KeyA']){ mx-=perpX; my-=perpY; }
+  if (keys['KeyD']){ mx+=perpX; my+=perpY; }
+  if (keys['ArrowLeft']) player.angle -= 1.6*dt;
+  if (keys['ArrowRight']) player.angle += 1.6*dt;
+  const len = Math.hypot(mx,my);
+  isWalking = len>0.01;
+  if (isWalking){
+    mx/=len; my/=len;
+    moveAmount(mx*speed, my*speed, speed);
+    distanceWalked += speed;
+  }
+  totalTurnSinceEvent += Math.abs(lastTurnDelta);
+  lastTurnDelta = 0;
+}
+
+/* ============================================================
+   RENDERER: DDA raycaster, internal buffer upscaled
+   ============================================================ */
+const BW = 480, BH = 270;
+const renderCanvas = document.createElement('canvas');
+renderCanvas.width = BW; renderCanvas.height = BH;
+const rctx = renderCanvas.getContext('2d');
+const imgData = rctx.createImageData(BW, BH);
+const pix32 = new Uint32Array(imgData.data.buffer);
+
+const sctx = screenCanvas.getContext('2d');
+sctx.imageSmoothingEnabled = false;
+function resize(){
+  screenCanvas.width = window.innerWidth;
+  screenCanvas.height = window.innerHeight;
+  sctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resize);
+resize();
+
+const FOV = 66 * Math.PI/180;
+const HALF_FOV = FOV/2;
+const zbuffer = new Float64Array(BW);
+const horizon = BH*0.5;
+
+// warm yellow haze (canonical Backrooms), mid-luminance so it never goes white or black
+const FOG_R=150, FOG_G=126, FOG_B=64;
+const AMBIENT = 0.62; // never-too-dark base brightness, soft even light
+const MAX_DIST = 16;
+
+function shadeColor(r,g,b,brightness,dist){
+  brightness = Math.min(1.25, AMBIENT+brightness);
+  let rr = r*brightness, gg=g*brightness, bb=b*brightness;
+  const fogT = Math.min(1, dist/MAX_DIST);
+  rr = lerp(rr, FOG_R, fogT*0.85);
+  gg = lerp(gg, FOG_G, fogT*0.85);
+  bb = lerp(bb, FOG_B, fogT*0.85);
+  return [rr>255?255:rr, gg>255?255:gg, bb>255?255:bb];
+}
+
+function flashlightContribution(rayDirX, rayDirY, dist){
+  if (!player.flashlight) return 0;
+  const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
+  const dot = rayDirX*dirX + rayDirY*dirY; // cos of angle between ray and forward
+  if (dot < 0.85) return 0;
+  const cone = (dot-0.85)/0.15;
+  const falloff = 1.0/(1.0+dist*dist*0.12);
+  return cone*falloff*2.4;
+}
+
+function castColumn(x){
+  const camX = (x/BW)*2 - 1;
+  const rayAngle = player.angle + Math.atan(camX*Math.tan(HALF_FOV));
+  const rdx = Math.cos(rayAngle), rdy = Math.sin(rayAngle);
+
+  let mapX = Math.floor(player.x), mapY = Math.floor(player.y);
+  const deltaDistX = Math.abs(1/rdx), deltaDistY = Math.abs(1/rdy);
+  let stepX, stepY, sideDistX, sideDistY;
+  if (rdx<0){ stepX=-1; sideDistX=(player.x-mapX)*deltaDistX; } else { stepX=1; sideDistX=(mapX+1-player.x)*deltaDistX; }
+  if (rdy<0){ stepY=-1; sideDistY=(player.y-mapY)*deltaDistY; } else { stepY=1; sideDistY=(mapY+1-player.y)*deltaDistY; }
+
+  let side=0, hit=false, dist=0;
+  for(let i=0;i<64 && !hit;i++){
+    if (sideDistX<sideDistY){ sideDistX+=deltaDistX; mapX+=stepX; side=0; }
+    else { sideDistY+=deltaDistY; mapY+=stepY; side=1; }
+    if (cellIsWall(mapX,mapY)) hit=true;
+  }
+  if (!hit){ dist=MAX_DIST; }
+  else dist = side===0 ? (sideDistX-deltaDistX) : (sideDistY-deltaDistY);
+  dist *= Math.cos(rayAngle-player.angle); // correct fisheye
+
+  let wallX;
+  if (side===0) wallX = player.y + dist*rdy; else wallX = player.x + dist*rdx;
+  wallX -= Math.floor(wallX);
+  let texX = Math.floor(wallX*TEX_SIZE);
+  if ((side===0 && rdx>0) || (side===1 && rdy<0)) texX = TEX_SIZE-texX-1;
+
+  zbuffer[x] = hit ? dist : MAX_DIST;
+
+  const lineHeight = Math.min(BH*3, (BH/Math.max(dist,0.0001)));
+  let drawStart = Math.floor(horizon - lineHeight/2);
+  let drawEnd = Math.floor(horizon + lineHeight/2);
+  const wx = side===0 ? mapX : player.x + dist*rdx;
+  const wy = side===1 ? mapY : player.y + dist*rdy;
+  const baseLight = (hit ? lightContribution(wx+0.5, wy+0.5) : 0) * (side===1?0.92:1.0);
+  const fl = flashlightContribution(rdx,rdy,dist);
+  const totalLight = baseLight + fl;
+
+  if (!hit){
+    return {drawStart:BH, drawEnd:0};
+  }
+
+  const ds = Math.max(0,drawStart), de = Math.min(BH-1,drawEnd);
+  const texColBase = texX;
+  for (let y=ds; y<=de; y++){
+    const texYf = (y-drawStart)/lineHeight;
+    let texY = Math.floor(texYf*TEX_SIZE);
+    if (texY<0) texY=0; if (texY>=TEX_SIZE) texY=TEX_SIZE-1;
+    const tp = TEX_WALL[texY*TEX_SIZE+texColBase];
+    const r=tp&0xFF, g=(tp>>8)&0xFF, b=(tp>>16)&0xFF;
+    const col = shadeColor(r,g,b,totalLight,dist);
+    pix32[y*BW+x] = packRGBA(col[0]|0,col[1]|0,col[2]|0,255);
+  }
+  return {drawStart, drawEnd};
+}
+
+function renderFloorCeilingRow(y, drawBounds){
+  // standard floor/ceiling casting per row
+  const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
+  const planeX = -dirY*Math.tan(HALF_FOV), planeY = dirX*Math.tan(HALF_FOV);
+  const isFloor = y > horizon;
+  const p = isFloor ? (y-horizon) : (horizon-y);
+  if (p<=0.0001) return;
+  const rowDist = (BH*0.42) / p;
+  if (rowDist>MAX_DIST*1.4) return;
+
+  const stepX = rowDist*( (dirX+planeX) - (dirX-planeX) ) / BW;
+  const stepY = rowDist*( (dirY+planeY) - (dirY-planeY) ) / BW;
+  let floorX = player.x + rowDist*(dirX-planeX);
+  let floorY = player.y + rowDist*(dirY-planeY);
+
+  // approximate per-row brightness using center sample (cheap, smooth)
+  const cx = player.x + rowDist*dirX, cy = player.y + rowDist*dirY;
+  const baseLight = lightContribution(cx,cy);
+  const fl = flashlightContribution(dirX,dirY,rowDist)*0.6;
+  const totalLight = baseLight+fl;
+  const tex = isFloor ? TEX_FLOOR : TEX_CEIL;
+
+  const rowOffset = y*BW;
+  for (let x=0;x<BW;x++){
+    if (rowDist < zbuffer[x]){
+      let tx = Math.floor(floorX*TEX_SIZE)&(TEX_SIZE-1);
+      let ty = Math.floor(floorY*TEX_SIZE)&(TEX_SIZE-1);
+      const tp = tex[ty*TEX_SIZE+tx];
+      let r=tp&0xFF,g=(tp>>8)&0xFF,b=(tp>>16)&0xFF;
+      let col;
+      if (!isFloor && isLightCell(Math.floor(floorX), Math.floor(floorY))){
+        // emissive fluorescent tube fixture - glows bright white, ignores fog/distance darkening
+        const st = lightStateFor(Math.floor(floorX), Math.floor(floorY));
+        const glow = st.off ? 0.1 : st.flicker;
+        r = lerp(r,255,glow*0.78); g = lerp(g,244,glow*0.78); b = lerp(b,190,glow*0.7);
+        col = [r,g,b];
+      } else {
+        col = shadeColor(r,g,b,totalLight,rowDist);
+      }
+      pix32[rowOffset+x] = packRGBA(col[0]|0,col[1]|0,col[2]|0,255);
+    }
+    floorX+=stepX; floorY+=stepY;
+  }
+}
+
+/* ---- sprite projection (silhouettes / shadow entities / jumpscare) ---- */
+function projectSprite(wx, wy, heightFrac, widthFrac, vOffset, drawCol){
+  const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
+  const planeX=-dirY*Math.tan(HALF_FOV), planeY=dirX*Math.tan(HALF_FOV);
+  const relX = wx-player.x, relY = wy-player.y;
+  const invDet = 1.0/(planeX*dirY - dirX*planeY);
+  const tx = invDet*(dirY*relX - dirX*relY);
+  const ty = invDet*(-planeY*relX + planeX*relY);
+  if (ty<=0.15) return;
+  const screenX = Math.floor((BW/2)*(1+tx/ty));
+  const spriteH = Math.abs(Math.floor(BH/ty * heightFrac));
+  const spriteW = Math.abs(Math.floor(BH/ty * widthFrac));
+  const drawStartY = Math.floor(horizon - spriteH/2 + spriteH*vOffset);
+  const drawEndY = drawStartY+spriteH;
+  const xStart = Math.max(0, screenX-spriteW/2|0);
+  const xEnd = Math.min(BW-1, screenX+spriteW/2|0);
+  for (let x=xStart; x<=xEnd; x++){
+    if (ty < zbuffer[x]){
+      const u = (x-xStart)/Math.max(1,(xEnd-xStart));
+      const ys = Math.max(0,drawStartY), ye=Math.min(BH-1,drawEndY);
+      for (let y=ys;y<=ye;y++){
+        const v = (y-drawStartY)/Math.max(1,spriteH);
+        const col = drawCol(u,v,ty);
+        if (col) pix32[y*BW+x] = packRGBA(col[0]|0,col[1]|0,col[2]|0,255);
+      }
+    }
+  }
+}
+
+function renderFrame(){
+  for (let x=0;x<BW;x++) castColumn(x);
+  for (let y=0;y<BH;y++) renderFloorCeilingRow(y, null);
+  drawActiveSprites();
+  rctx.putImageData(imgData, 0, 0);
+  sctx.clearRect(0,0,screenCanvas.width,screenCanvas.height);
+  sctx.drawImage(renderCanvas, 0, 0, screenCanvas.width, screenCanvas.height);
+}
+
+/* ============================================================
+   AUDIO (Web Audio API): hum, whine, footsteps (HRTF), buzz
+   ============================================================ */
+let actx=null, master=null, listenerReady=false;
+function initAudio(){
+  if (actx) { actx.resume(); return; }
+  actx = new (window.AudioContext||window.webkitAudioContext)();
+  master = actx.createGain(); master.gain.value=0.6; master.connect(actx.destination);
+
+  // constant low hum: 58Hz + 116Hz + saw grit
+  const hum1 = actx.createOscillator(); hum1.type='sine'; hum1.frequency.value=58;
+  const hum2 = actx.createOscillator(); hum2.type='sine'; hum2.frequency.value=116;
+  const grit = actx.createOscillator(); grit.type='sawtooth'; grit.frequency.value=58;
+  const gritFilt = actx.createBiquadFilter(); gritFilt.type='lowpass'; gritFilt.frequency.value=180;
+  const humGain = actx.createGain(); humGain.gain.value=0.05;
+  const gritGain = actx.createGain(); gritGain.gain.value=0.012;
+  hum1.connect(humGain); hum2.connect(humGain);
+  grit.connect(gritFilt); gritFilt.connect(gritGain);
+  humGain.connect(master); gritGain.connect(master);
+  hum1.start(); hum2.start(); grit.start();
+
+  // fluorescent high whine
+  const whine = actx.createOscillator(); whine.type='sine'; whine.frequency.value=9800;
+  const whineGain = actx.createGain(); whineGain.gain.value=0.0025;
+  whine.connect(whineGain); whineGain.connect(master);
+  whine.start();
+  window.__whineGain = whineGain;
+
+  window.__buzzChain = makeBuzzChain();
+  listenerReady = true;
+}
+function makeBuzzChain(){
+  const buzzOsc = actx.createOscillator(); buzzOsc.type='square'; buzzOsc.frequency.value=120;
+  const buzzGain = actx.createGain(); buzzGain.gain.value=0;
+  buzzOsc.connect(buzzGain); buzzGain.connect(master);
+  buzzOsc.start();
+  return {osc:buzzOsc, gain:buzzGain};
+}
+function setBuzz(intensity){
+  if (!actx) return;
+  window.__buzzChain.gain.gain.setTargetAtTime(intensity*0.04, actx.currentTime, 0.05);
+}
+function audioFlashlightClick(){
+  if (!actx) return;
+  const o = actx.createOscillator(); o.type='square'; o.frequency.value=400;
+  const g = actx.createGain(); g.gain.value=0.05;
+  o.connect(g); g.connect(master);
+  o.start(); g.gain.setTargetAtTime(0, actx.currentTime+0.01, 0.01);
+  o.stop(actx.currentTime+0.05);
+}
+function makeNoiseBuffer(duration){
+  const len = Math.floor(actx.sampleRate*duration);
+  const buf = actx.createBuffer(1, len, actx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
+  return buf;
+}
+function playSpatial(buffer, opts){
+  if (!actx) return null;
+  opts = opts||{};
+  const src = actx.createBufferSource(); src.buffer = buffer;
+  const filt = actx.createBiquadFilter();
+  filt.type = opts.filterType||'bandpass';
+  filt.frequency.value = opts.freq||700;
+  filt.Q.value = opts.q||0.7;
+  const gain = actx.createGain(); gain.gain.value = opts.gain!==undefined?opts.gain:0.3;
+  let panner=null;
+  if (opts.relX!==undefined){
+    panner = actx.createPanner();
+    panner.panningModel='HRTF'; panner.distanceModel='inverse';
+    panner.refDistance=1; panner.maxDistance=40; panner.rolloffFactor=1.2;
+    panner.positionX.value = opts.relX; panner.positionY.value=0; panner.positionZ.value=opts.relZ||0;
+    src.connect(filt); filt.connect(gain); gain.connect(panner); panner.connect(master);
+  } else {
+    src.connect(filt); filt.connect(gain); gain.connect(master);
+  }
+  src.start();
+  if (opts.duration) src.stop(actx.currentTime+opts.duration);
+  return {src,gain,panner};
+}
+function playFootstep(relX, relZ, volume){
+  if (!actx) return;
+  const buf = makeNoiseBuffer(0.12);
+  playSpatial(buf, {filterType:'lowpass', freq:900, gain:(volume||0.25), relX, relZ, duration:0.12});
+}
+function playFootstepSeries(count, interval, relXFn, relZFn, volume){
+  let i=0;
+  const id = setInterval(()=>{
+    if (i>=count){ clearInterval(id); return; }
+    playFootstep(relXFn(i), relZFn(i), volume);
+    i++;
+  }, interval);
+  return id;
+}
+function updateListenerOrientation(){
+  if (!actx || !actx.listener) return;
+  const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
+  const L = actx.listener;
+  if (L.positionX){
+    L.positionX.value=player.x; L.positionY.value=0; L.positionZ.value=player.y;
+    L.forwardX.value=dirX; L.forwardY.value=0; L.forwardZ.value=dirY;
+    L.upX.value=0; L.upY.value=1; L.upZ.value=0;
+  } else if (L.setPosition){
+    L.setPosition(player.x,0,player.y);
+    L.setOrientation(dirX,0,dirY,0,1,0);
+  }
+}
+function playGroan(){
+  if (!actx) return;
+  const o = actx.createOscillator(); o.type='sine'; o.frequency.value=85;
+  const g = actx.createGain(); g.gain.value=0.0001;
+  o.connect(g); g.connect(master);
+  o.start();
+  g.gain.linearRampToValueAtTime(0.05, actx.currentTime+0.4);
+  g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime+2.2);
+  o.frequency.linearRampToValueAtTime(60, actx.currentTime+2.2);
+  o.stop(actx.currentTime+2.3);
+}
+function playScream(){
+  if (!actx) return;
+  const o = actx.createOscillator(); o.type='sawtooth'; o.frequency.value=320;
+  const filt = actx.createBiquadFilter(); filt.type='bandpass'; filt.frequency.value=900; filt.Q.value=4;
+  const g = actx.createGain(); g.gain.value=0.0001;
+  o.connect(filt); filt.connect(g); g.connect(master);
+  o.start();
+  g.gain.linearRampToValueAtTime(0.18, actx.currentTime+0.15);
+  o.frequency.linearRampToValueAtTime(900, actx.currentTime+0.5);
+  o.frequency.linearRampToValueAtTime(200, actx.currentTime+1.4);
+  g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime+1.8);
+  o.stop(actx.currentTime+1.9);
+}
+function playJumpscareStinger(){
+  if (!actx) return;
+  const buf = makeNoiseBuffer(0.5);
+  playSpatial(buf, {filterType:'highpass', freq:200, gain:0.7, duration:0.5});
+  const o = actx.createOscillator(); o.type='sawtooth'; o.frequency.value=110;
+  const g = actx.createGain(); g.gain.value=0.4;
+  o.connect(g); g.connect(master); o.start();
+  g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime+0.6);
+  o.stop(actx.currentTime+0.6);
+}
+
+/* ============================================================
+   SUBTITLES
+   ============================================================ */
+const subtitleEl = document.getElementById('subtitle');
+let subtitleTimer=null;
+function showSubtitle(text, duration){
+  subtitleEl.textContent = text;
+  subtitleEl.style.opacity = 1;
+  if (subtitleTimer) clearTimeout(subtitleTimer);
+  subtitleTimer = setTimeout(()=>{ subtitleEl.style.opacity=0; }, duration||3000);
+}
+
+/* ============================================================
+   HORROR EVENT SYSTEM
+   ============================================================ */
+let activeSprites = []; // {x,y,until,heightFrac,widthFrac,vOffset,colorFn}
+function addSprite(spr){ activeSprites.push(spr); }
+function drawActiveSprites(){
+  const now = performance.now();
+  activeSprites = activeSprites.filter(s=>s.until>now);
+  for (const s of activeSprites){
+    projectSprite(s.x, s.y, s.heightFrac, s.widthFrac, s.vOffset, s.colorFn);
+  }
+}
+
+let eventActive = false;
+let eventCooldownUntil = 0;
+let nextEventAt = performance.now() + 4000;
+let firstSilhouetteDone = false;
+let screamUsed = false;
+const startTime = performance.now();
+
+function aheadStreetPoint(distAway){
+  // find a point roughly ahead of the player along current facing, snapped to nearest street line for visibility
+  const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
+  let x = player.x + dirX*distAway, y = player.y + dirY*distAway;
+  return {x,y};
+}
+
+function eventFootstepsBehind(sync){
+  showSubtitle(sync ? "...footsteps. matching yours." : "...footsteps behind you.", 3500);
+  let cancelled=false;
+  totalTurnSinceEvent = 0;
+  const checkTurn = setInterval(()=>{
+    if (totalTurnSinceEvent > 0.6){ cancelled=true; clearInterval(checkTurn); }
+  }, 100);
+  const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
+  const behindX = -dirX, behindY=-dirY;
+  let i=0;
+  const steps = 5+Math.floor(Math.random()*3);
+  const id = setInterval(()=>{
+    if (cancelled || i>=steps){ clearInterval(id); clearInterval(checkTurn); return; }
+    const phase = sync ? (i*0.55) : (i*0.55 + 0.18);
+    playFootstep(Math.sin(i*1.3)*0.6, 6, 0.35);
+    i++;
+  }, 550);
+}
+
+function eventLightFlicker(){
+  if (nearbyLights.length===0) { endEvent(); return; }
+  const L = nearbyLights[Math.floor(Math.random()*nearbyLights.length)];
+  const st = lightStateFor(L.gx,L.gy);
+  let ticks=0;
+  setBuzz(1);
+  const id = setInterval(()=>{
+    st.flicker = Math.random()<0.5 ? (0.15+Math.random()*0.2) : 1;
+    ticks++;
+    if (ticks>10){ st.flicker=1; clearInterval(id); setBuzz(0); endEvent(); }
+  }, 110);
+}
+
+function eventSingleLightOff(){
+  // pick a light roughly behind the player
+  const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
+  let candidate=null;
+  for (const L of nearbyLights){
+    const dx=L.x-player.x, dy=L.y-player.y;
+    const dot = dx*dirX+dy*dirY;
+    if (dot < -0.3){ candidate=L; break; }
+  }
+  if (!candidate){ endEvent(); return; }
+  const st = lightStateFor(candidate.gx,candidate.gy);
+  st.off = true;
+  const checker = setInterval(()=>{
+    const dx=candidate.x-player.x, dy=candidate.y-player.y;
+    const d = Math.hypot(dx,dy);
+    const ndx=dx/d, ndy=dy/d;
+    const facing = ndx*Math.cos(player.angle)+ndy*Math.sin(player.angle);
+    if (facing > 0.5){ st.off=false; clearInterval(checker); endEvent(); }
+  }, 200);
+  setTimeout(()=>{ st.off=false; clearInterval(checker); endEvent(); }, 12000);
+}
+
+function silhouetteColor(u,v,dist){
+  if (v<0.05 || v>0.98) return null;
+  const edge = Math.min(u, 1-u);
+  const a = edge<0.12 ? edge/0.12 : 1;
+  if (a<0.15) return null;
+  const dark = 8;
+  return [dark, dark, dark+3];
+}
+function eventSilhouette(glimpseOnly){
+  const dist = 9+Math.random()*5;
+  const p = aheadStreetPoint(dist);
+  const dur = glimpseOnly ? 350 : (900+Math.random()*900);
+  showSubtitle(glimpseOnly ? "...did something just move?" : "something stands there. watching.", glimpseOnly?1500:3000);
+  addSprite({x:p.x,y:p.y, until:performance.now()+dur, heightFrac:1.6, widthFrac:0.5, vOffset:0.05, colorFn:silhouetteColor});
+  firstSilhouetteDone = true;
+  setTimeout(endEvent, dur+50);
+}
+
+function eventShadowEntityFar(){
+  const dist = 13+Math.random()*4;
+  const p = aheadStreetPoint(dist);
+  const dur = 600+Math.random()*500;
+  showSubtitle("a shape, far down the hall.", 2500);
+  addSprite({x:p.x,y:p.y, until:performance.now()+dur, heightFrac:1.4, widthFrac:0.4, vOffset:0.1,
+    colorFn:(u,v)=>{ if (v<0.1||v>0.95) return null; return [3,3,4]; }});
+  setTimeout(endEvent, dur+50);
+}
+
+function eventDistantNoise(){
+  playGroan();
+  showSubtitle("a distant sound. somewhere else.", 2500);
+  setTimeout(endEvent, 1500);
+}
+
+function eventSpatialAnomaly(){
+  const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
+  // pick a cell behind player not currently visible
+  const bx = Math.floor(player.x - dirX*3 + (Math.random()-0.5)*4);
+  const by = Math.floor(player.y - dirY*3 + (Math.random()-0.5)*4);
+  if (cellIsWall(bx,by)){
+    overrides.set(bx+','+by, {wall:false, expires:performance.now()+15000});
+    showSubtitle("...was that door always there?", 3000);
+  } else {
+    overrides.set(bx+','+by, {wall:true, expires:performance.now()+15000});
+    showSubtitle("...the hallway feels shorter now.", 3000);
+  }
+  setTimeout(()=>{ overrides.delete(bx+','+by); endEvent(); }, 8000);
+}
+
+function eventScream(){
+  screamUsed = true;
+  playScream();
+  showSubtitle("AAAAAA— ...silence.", 4000);
+  setTimeout(endEvent, 2500);
+}
+
+function eventJumpscare(){
+  const p = aheadStreetPoint(1.4);
+  addSprite({x:p.x,y:p.y, until:performance.now()+260, heightFrac:2.4, widthFrac:1.0, vOffset:0.0,
+    colorFn:(u,v)=>{ const e=Math.min(u,1-u); if (e<0.4) return null; return [200,30,30]; }});
+  playJumpscareStinger();
+  const flashEl = document.getElementById('flash');
+  flashEl.style.opacity = 0.9;
+  setTimeout(()=>{ flashEl.style.opacity=0; }, 90);
+  showSubtitle("", 100);
+  setTimeout(endEvent, 400);
+}
+
+function endEvent(){
+  eventActive = false;
+  eventCooldownUntil = performance.now() + 3000 + Math.random()*4000;
+}
+
+function maybeTriggerSpecialFirstSilhouette(){
+  if (!firstSilhouetteDone && (performance.now()-startTime) > 3000 && (performance.now()-startTime) < 10000){
+    if (Math.random()<0.04){
+      eventActive = true;
+      eventSilhouette(false);
+    }
+  }
+}
+
+function escalation(){
+  const t = (performance.now()-startTime)/1000;
+  const walkFactor = Math.min(2.2, 1 + distanceWalked*0.01);
+  const timeFactor = Math.min(1.8, 1 + t/300);
+  return walkFactor*timeFactor;
+}
+
+function tickEvents(){
+  const now = performance.now();
+  maybeTriggerSpecialFirstSilhouette();
+  if (eventActive) return;
+  if (now < eventCooldownUntil) return;
+  if (now < nextEventAt) return;
+
+  eventActive = true;
+  const esc = escalation();
+  const roll = Math.random();
+  // weighted selection
+  if (roll < 0.22) eventFootstepsBehind(Math.random()<0.4);
+  else if (roll < 0.40) eventLightFlicker();
+  else if (roll < 0.52) eventSingleLightOff();
+  else if (roll < 0.68) eventSilhouette(Math.random()<0.3);
+  else if (roll < 0.76) eventShadowEntityFar();
+  else if (roll < 0.90) eventDistantNoise();
+  else if (roll < 0.96) eventSpatialAnomaly();
+  else if (!screamUsed) eventScream();
+  else eventLightFlicker();
+
+  const baseInterval = 9000 - Math.min(5000, distanceWalked*30);
+  nextEventAt = now + Math.max(2500, baseInterval/esc) + Math.random()*3000;
+
+  // ultra-rare jumpscare roll, independent, <1% chance per minute, gated by min elapsed time
+  if (now-startTime>30000 && Math.random() < (0.0001*esc)){
+    setTimeout(eventJumpscare, 200);
+  }
+}
+
+/* ============================================================
+   POST FX: grain canvas
+   ============================================================ */
+const grainCanvas = document.getElementById('grain');
+const gctx = grainCanvas.getContext('2d');
+function resizeGrain(){ grainCanvas.width=160; grainCanvas.height=90; }
+resizeGrain();
+function drawGrain(){
+  const w=grainCanvas.width,h=grainCanvas.height;
+  const id = gctx.createImageData(w,h);
+  const d = id.data;
+  for (let i=0;i<d.length;i+=4){
+    const v = (Math.random()*255)|0;
+    d[i]=v; d[i+1]=v; d[i+2]=v; d[i+3]=40;
+  }
+  gctx.putImageData(id,0,0);
+}
+
+/* ============================================================
+   MAIN LOOP
+   ============================================================ */
+let lastT = performance.now();
+function loop(){
+  const now = performance.now();
+  const dt = Math.min(0.05, (now-lastT)/1000);
+  lastT = now;
+  frameClock++;
+
+  updatePlayer(dt);
+  if (frameClock % 20 === 0) refreshNearbyLights(player.x, player.y);
+  // ambient flicker - subtle, occasional, never to black
+  for (const [k,st] of lightStates){
+    if (!eventActive) st.flicker = lerp(st.flicker, 1, 0.05);
+  }
+  updateListenerOrientation();
+  if (window.__whineGain) window.__whineGain.gain.value = 0.0018+Math.random()*0.001;
+
+  tickEvents();
+  renderFrame();
+  if (frameClock % 4 === 0) drawGrain();
+
+  requestAnimationFrame(loop);
+}
+refreshNearbyLights(player.x, player.y);
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
