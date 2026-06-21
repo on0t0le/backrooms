@@ -357,12 +357,44 @@ function computeExitCell(){
         if (cellIsWall(gx,gy)) continue;
         const d = Math.hypot(gx-sx, gy-sy);
         if (d < MIN_DIST) continue;
-        if (hash2(gx,gy,777) < 0.0035){ best = {gx, gy, x:gx+0.5, y:gy+0.5, d}; break; }
+        if (hash2(gx,gy,777) < 0.02){ best = {gx, gy, x:gx+0.5, y:gy+0.5, d}; break; }
       }
     }
   }
   // guaranteed fallback so an exit always exists
   exitCell = best || {gx:sx+MIN_DIST, gy:sy, x:sx+MIN_DIST+0.5, y:sy+0.5, d:MIN_DIST};
+}
+
+/* ---- TRAIL: a route to the exit, but only the next few cells ever glow ---- */
+// Built along the guaranteed-open street lattice; stored as cell-key -> order
+// index from the player. The renderer only lights the lowest indices (the next
+// stretch ahead), so it guides without laying out the whole solution.
+const TRAIL_WINDOW = 14;          // how many cells ahead light up
+let trailSet = new Map();
+let trailKeyCell = '';
+function pushLine(x0,y0,x1,y1,arr){
+  // axis-aligned Manhattan walk (x first, then y), inclusive of both ends
+  let x=x0, y=y0;
+  arr.push([x,y]);
+  while (x!==x1){ x += x1>x?1:-1; arr.push([x,y]); }
+  while (y!==y1){ y += y1>y?1:-1; arr.push([x,y]); }
+}
+function computeTrail(){
+  trailSet = new Map();
+  if (!exitCell) return;
+  const S = STREET_SPACING;
+  const px=Math.round(player.x), py=Math.round(player.y);
+  const ex=exitCell.gx, ey=exitCell.gy;
+  // nearest street intersections to player and to exit (multiples of S are streets)
+  const ix=Math.round(px/S)*S, iy=Math.round(py/S)*S;
+  const jx=Math.round(ex/S)*S, jy=Math.round(ey/S)*S;
+  const arr=[];
+  pushLine(px,py, ix,iy, arr);   // hop onto the nearest street intersection
+  pushLine(ix,iy, ix,jy, arr);   // travel the vertical street
+  pushLine(ix,jy, jx,jy, arr);   // travel the horizontal street
+  pushLine(jx,jy, ex,ey, arr);   // step into the exit
+  let idx=0;
+  for (const [x,y] of arr){ const k=x+','+y; if (!trailSet.has(k)) trailSet.set(k, idx); idx++; }
 }
 
 const keys = {};
@@ -414,6 +446,7 @@ startScreen.addEventListener('click', ()=>{
   gameStarted = true;
   runStartTime = performance.now();
   computeExitCell();
+  computeTrail();
   screenCanvas.requestPointerLock();
   initAudio();
 });
@@ -440,9 +473,11 @@ function restartRun(){
   eventActive = false; eventCooldownUntil = 0; nextEventAt = performance.now()+4000;
   firstSilhouetteDone = false; screamUsed = false;
   endHunt(); straightWalkTimer = 0; huntCooldownUntil = 0;
+  stalker = null; stalkerCooldownUntil = 0; ambientScale = 1;
   activeSprites.length = 0;
   refreshNearbyLights(player.x, player.y);
   computeExitCell();
+  trailKeyCell = ''; computeTrail();
   endScreen.classList.add('hidden');
   pausedScreen.classList.add('hidden');
   screenCanvas.requestPointerLock();
@@ -541,10 +576,11 @@ const horizon = BH*0.5;
 // warm yellow haze (canonical Backrooms), mid-luminance so it never goes white or black
 const FOG_R=150, FOG_G=126, FOG_B=64;
 const AMBIENT = 0.62; // never-too-dark base brightness, soft even light
+let ambientScale = 1; // dropped briefly during a blackout beat, then restored
 const MAX_DIST = 16;
 
 function shadeColor(r,g,b,brightness,dist){
-  brightness = Math.min(1.25, AMBIENT+brightness);
+  brightness = Math.min(1.25, AMBIENT*ambientScale+brightness);
   let rr = r*brightness, gg=g*brightness, bb=b*brightness;
   const fogT = Math.min(1, dist/MAX_DIST);
   rr = lerp(rr, FOG_R, fogT*0.85);
@@ -650,10 +686,20 @@ function renderFloorCeilingRow(y, drawBounds){
       let r=tp&0xFF,g=(tp>>8)&0xFF,b=(tp>>16)&0xFF;
       let col;
       const cfx = Math.floor(floorX), cfy = Math.floor(floorY);
+      let trailIdx;
       if (exitCell && cfx===exitCell.gx && cfy===exitCell.gy){
         // the exit tile glows green-white on both floor and ceiling, visible from afar
         const pulse = 0.7 + 0.3*Math.sin(performance.now()*0.004);
         col = [lerp(r,120,pulse), lerp(g,255,pulse), lerp(b,150,pulse)];
+      } else if (isFloor && !huntActive && trailSet.size &&
+                 (trailIdx=trailSet.get(cfx+','+cfy))!==undefined && trailIdx<=TRAIL_WINDOW){
+        // breadcrumb glow on the floor — only the next few cells, fading out, and it
+        // goes dark while you're being hunted (fear makes you lose the path)
+        const fade = 1 - trailIdx/TRAIL_WINDOW;
+        const flow = 0.5 + 0.5*Math.sin(performance.now()*0.006 - trailIdx*0.6);
+        const a = fade*flow*0.8;
+        const base = shadeColor(r,g,b,totalLight,rowDist);
+        col = [lerp(base[0],55,a), lerp(base[1],215,a), lerp(base[2],205,a)];
       } else if (!isFloor && isLightCell(cfx, cfy)){
         // emissive fluorescent tube fixture - glows bright white, ignores fog/distance darkening
         const st = lightStateFor(cfx, cfy);
@@ -742,11 +788,46 @@ function drawExit(){
   projectSprite(exitCell.x, exitCell.y, 2.2, 0.7, -0.1, exitColor);
 }
 
+// a soft green beam above the exit, drawn additively and IGNORING the z-buffer so
+// it reads as light over the walls — a long-range "this way" cue that gets brighter
+// only as you close in, so it orients without trivializing the maze.
+function drawSkybeam(){
+  if (!exitCell) return;
+  const dirX=Math.cos(player.angle), dirY=Math.sin(player.angle);
+  const planeX=-dirY*Math.tan(HALF_FOV), planeY=dirX*Math.tan(HALF_FOV);
+  const relX=exitCell.x-player.x, relY=exitCell.y-player.y;
+  const invDet=1/(planeX*dirY-dirX*planeY);
+  const tx=invDet*(dirY*relX-dirX*relY);
+  const ty=invDet*(-planeY*relX+planeX*relY);
+  if (ty<=0.2) return; // behind the player
+  const sx=Math.floor((BW/2)*(1+tx/ty));
+  if (sx<-20||sx>BW+20) return;
+  const w=2+Math.floor(40/ty);
+  const intensity=Math.max(0.1, Math.min(0.8, 5/ty));
+  const x0=Math.max(0,sx-w), x1=Math.min(BW-1,sx+w);
+  const yBot=Math.floor(horizon);
+  for (let x=x0;x<=x1;x++){
+    const hx=1-Math.abs(x-sx)/(w+1);
+    if (hx<=0) continue;
+    for (let y=0;y<yBot;y++){
+      const vy=1-y/yBot;                  // brightest at the top
+      const a=intensity*hx*(0.3+0.7*vy);
+      if (a<=0.02) continue;
+      const p=pix32[y*BW+x];
+      let r=p&0xFF, g=(p>>8)&0xFF, b=(p>>16)&0xFF;
+      r=Math.min(255,r+45*a); g=Math.min(255,g+185*a); b=Math.min(255,b+125*a);
+      pix32[y*BW+x]=packRGBA(r|0,g|0,b|0,255);
+    }
+  }
+}
+
 function renderFrame(){
   for (let x=0;x<BW;x++) castColumn(x);
   for (let y=0;y<BH;y++) renderFloorCeilingRow(y, null);
+  drawSkybeam();
   drawExit();
   drawActiveSprites();
+  drawStalker();
   drawHunt();
   rctx.putImageData(imgData, 0, 0);
   sctx.clearRect(0,0,screenCanvas.width,screenCanvas.height);
@@ -894,6 +975,17 @@ function playJumpscareStinger(){
   g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime+0.6);
   o.stop(actx.currentTime+0.6);
 }
+function playBreath(){
+  if (!actx) return;
+  // a slow ragged in-breath: filtered noise swell, close behind
+  const buf = makeNoiseBuffer(1.1);
+  playSpatial(buf, {filterType:'bandpass', freq:480, q:1.4, gain:0.13, relX:(Math.random()-0.5)*0.6, relZ:1.2, duration:1.1});
+}
+function playWhisper(){
+  if (!actx) return;
+  const buf = makeNoiseBuffer(0.55);
+  playSpatial(buf, {filterType:'bandpass', freq:1900, q:2.4, gain:0.09, relX:(Math.random()-0.5)*2, relZ:0.6, duration:0.55});
+}
 
 /* ============================================================
    SUBTITLES
@@ -1011,7 +1103,8 @@ function makeSilhouetteColor(rgb){
 }
 const silhouetteColor = makeSilhouetteColor([10,10,14]);
 function eventSilhouette(glimpseOnly){
-  const p = visiblePoint(player.angle, 9+Math.random()*5, 3.0);
+  // closer than before so the figure is unmistakable and unsettling
+  const p = visiblePoint(player.angle, 6+Math.random()*4, 2.5);
   if (!p){ endEvent(); return; }
   const dur = glimpseOnly ? 450 : (1100+Math.random()*900);
   showSubtitle(glimpseOnly ? "...did something just move?" : "something stands there. watching.", glimpseOnly?1500:3000);
@@ -1071,9 +1164,28 @@ function eventJumpscare(){
   setTimeout(endEvent, 400);
 }
 
+function eventBlackout(){
+  // the lights cut out — a brief, deliberate plunge into near-dark with breathing,
+  // then they snap back. Steady state stays lit; this is a short scripted beat.
+  const affected=[];
+  for (const L of nearbyLights){ const st=lightStateFor(L.gx,L.gy); st.off=true; affected.push(st); }
+  ambientScale = 0.3;
+  playBreath();
+  setBuzz(0.5);
+  showSubtitle("", 100);
+  const dur = 700 + Math.random()*700;
+  setTimeout(()=>{
+    for (const st of affected){ st.off=false; st.flicker=1; }
+    ambientScale = 1;
+    setBuzz(0);
+    if (Math.random()<0.5) playWhisper();
+    endEvent();
+  }, dur);
+}
+
 function endEvent(){
   eventActive = false;
-  eventCooldownUntil = performance.now() + 3000 + Math.random()*4000;
+  eventCooldownUntil = performance.now() + 1800 + Math.random()*2600;
 }
 
 /* ============================================================
@@ -1090,8 +1202,9 @@ let huntCooldownUntil = 0;   // no new hunt before this time
 const huntEntityColor = makeSilhouetteColor([6,2,3]);
 
 function huntThreshold(){
-  // long fuse: ~32s of near-straight walking early, easing down with escalation
-  return Math.max(18, 34 - escalation()*6);
+  // shorter fuse than before so walking straight is genuinely risky; the stalker
+  // also triggers hunts directly, so this is the secondary path into a chase
+  return Math.max(12, 26 - escalation()*5);
 }
 function startHunt(){
   huntActive = true;
@@ -1115,7 +1228,7 @@ function endHunt(shaken){
   huntWarnEl.classList.remove('on');
   huntTextEl.classList.remove('on');
   setBuzz(0);
-  huntCooldownUntil = performance.now() + 25000 + Math.random()*20000;
+  huntCooldownUntil = performance.now() + 12000 + Math.random()*12000;
   straightWalkTimer = 0;
   if (shaken) showSubtitle("...you lost it. for now.", 3000);
 }
@@ -1155,6 +1268,64 @@ function drawHunt(){
   projectSprite(huntEntity.x, huntEntity.y, 1.9, 0.7, 0.05, huntEntityColor);
 }
 
+/* ============================================================
+   STALKER — the thing that's never quite there
+   ============================================================ */
+let stalker = null;              // {x,y} world position
+let stalkerCooldownUntil = 0;
+const stalkerColor = makeSilhouetteColor([8,8,12]);
+
+function playerSeesPoint(wx,wy){
+  const dx=wx-player.x, dy=wy-player.y;
+  const d=Math.hypot(dx,dy)||1;
+  const dot=(dx/d)*Math.cos(player.angle)+(dy/d)*Math.sin(player.angle);
+  if (dot<0.95) return false;                  // not roughly centered in view
+  return castRayDist(Math.atan2(dy,dx), MAX_DIST) >= d-0.5; // clear line of sight
+}
+function spawnStalker(){
+  // try behind, then to the sides, at a visible medium distance
+  for (const o of [Math.PI, Math.PI*0.6, -Math.PI*0.6, Math.PI*0.35, -Math.PI*0.35]){
+    const a=player.angle+o+(Math.random()-0.5)*0.4;
+    const p=visiblePoint(a, 7+Math.random()*4, 4.0);
+    if (p){ stalker={x:p.x,y:p.y}; playWhisper(); return; }
+  }
+}
+function updateStalker(dt){
+  if (runOver || huntActive) return;
+  const now=performance.now();
+  if (now-runStartTime < 12000) return; // grace period to get your bearings
+  if (!stalker){
+    if (now<stalkerCooldownUntil) return;
+    spawnStalker();
+    stalkerCooldownUntil = now + 4000 + Math.random()*5000;
+    return;
+  }
+  // look right at it and it's gone
+  if (playerSeesPoint(stalker.x, stalker.y)){
+    stalker=null;
+    playWhisper();
+    stalkerCooldownUntil = now + 3000 + Math.random()*4000;
+    showSubtitle("...it was there. now it isn't.", 1800);
+    return;
+  }
+  // creeps closer while you're not looking
+  const dx=player.x-stalker.x, dy=player.y-stalker.y;
+  const d=Math.hypot(dx,dy)||1;
+  stalker.x += (dx/d)*0.75*dt;
+  stalker.y += (dy/d)*0.75*dt;
+  if (frameClock%45===0) playBreath();
+  // if it reaches you unseen, it lunges into a full hunt
+  if (d<2.6){
+    stalker=null;
+    if (now>=huntCooldownUntil) startHunt();
+    else stalkerCooldownUntil = now + 4000;
+  }
+}
+function drawStalker(){
+  if (!stalker) return;
+  projectSprite(stalker.x, stalker.y, 1.8, 0.62, 0.05, stalkerColor);
+}
+
 function maybeTriggerSpecialFirstSilhouette(){
   if (!firstSilhouetteDone && (performance.now()-startTime) > 3000 && (performance.now()-startTime) < 10000){
     if (Math.random()<0.04){
@@ -1166,8 +1337,8 @@ function maybeTriggerSpecialFirstSilhouette(){
 
 function escalation(){
   const t = (performance.now()-startTime)/1000;
-  const walkFactor = Math.min(2.2, 1 + distanceWalked*0.01);
-  const timeFactor = Math.min(1.8, 1 + t/300);
+  const walkFactor = Math.min(2.8, 1 + distanceWalked*0.016);
+  const timeFactor = Math.min(2.4, 1 + t/200);
   return walkFactor*timeFactor;
 }
 
@@ -1182,19 +1353,20 @@ function tickEvents(){
   eventActive = true;
   const esc = escalation();
   const roll = Math.random();
-  // weighted selection
-  if (roll < 0.22) eventFootstepsBehind(Math.random()<0.4);
-  else if (roll < 0.40) eventLightFlicker();
-  else if (roll < 0.52) eventSingleLightOff();
-  else if (roll < 0.68) eventSilhouette(Math.random()<0.3);
-  else if (roll < 0.76) eventShadowEntityFar();
-  else if (roll < 0.90) eventDistantNoise();
-  else if (roll < 0.96) eventSpatialAnomaly();
+  // weighted selection — heavier on the visible, dread-building beats
+  if (roll < 0.16) eventFootstepsBehind(Math.random()<0.4);
+  else if (roll < 0.30) eventLightFlicker();
+  else if (roll < 0.42) eventSingleLightOff();
+  else if (roll < 0.52) eventBlackout();
+  else if (roll < 0.72) eventSilhouette(Math.random()<0.3);
+  else if (roll < 0.82) eventShadowEntityFar();
+  else if (roll < 0.92) eventDistantNoise();
+  else if (roll < 0.97) eventSpatialAnomaly();
   else if (!screamUsed) eventScream();
-  else eventLightFlicker();
+  else eventBlackout();
 
-  const baseInterval = 9000 - Math.min(5000, distanceWalked*30);
-  nextEventAt = now + Math.max(2500, baseInterval/esc) + Math.random()*3000;
+  const baseInterval = 6000 - Math.min(4000, distanceWalked*30);
+  nextEventAt = now + Math.max(1600, baseInterval/esc) + Math.random()*2000;
 
   // ultra-rare jumpscare roll, independent, <1% chance per minute, gated by min elapsed time
   if (now-startTime>30000 && Math.random() < (0.0001*esc)){
@@ -1263,6 +1435,11 @@ function loop(){
       Math.floor(player.x)===exitCell.gx && Math.floor(player.y)===exitCell.gy){
     finishRun(true);
   }
+  if (gameStarted && !runOver){
+    const ck = Math.round(player.x)+','+Math.round(player.y);
+    if (ck!==trailKeyCell){ trailKeyCell=ck; computeTrail(); }
+  }
+  if (gameStarted) updateStalker(dt);
   if (gameStarted) updateHunt(dt);
   if (gameStarted && frameClock % 10 === 0) updateHud();
   tickEvents();

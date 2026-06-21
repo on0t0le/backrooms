@@ -38,22 +38,35 @@ doc used to drive the implementation). Summary of what's implemented:
 ### Horror events
 A randomized, cooldown-gated scheduler drives psychological-horror beats tied into
 the existing audio/lighting systems (never separate jump-scare overlays): footsteps
-behind the camera, light flickers, a single light going dark behind you, a glimpsed
-silhouette down a corridor, rare shadow entities, spatial anomalies (a hallway that
+behind the camera, light flickers, a single light going dark behind you, **full
+blackouts** (lights cut to near-dark with breathing, then snap back), a glimpsed
+silhouette down a corridor, shadow entities, spatial anomalies (a hallway that
 wasn't there before), a once-per-session distant scream, and an extremely rare
-(<1%/minute) jumpscare. Frequency and intensity slowly escalate the longer you walk.
+(<1%/minute) jumpscare. Frequency and intensity escalate the longer you walk. Note:
+the blackout beat is a deliberate, short, temporary deviation from the otherwise
+"always lit" rule — the steady state stays fully lit between beats.
 
 ### Objective & game loop
 - **Goal:** find the **exit** — one rare, deterministic tile per world that glows as a
-  green beacon column, visible down open corridors. Step onto it to escape and win.
-- **Navigation aid:** a minimal HUD (top-left) shows the straight-line distance and
-  rough heading (ahead / behind / left / right) to the exit beacon.
-- **The hunt (rare but intense):** walk in a straight line too long and *something*
-  starts hunting you from behind. A red warning closes in and a short countdown
-  starts — keep **changing direction** to accumulate enough turning and shake it. If
-  the countdown runs out, it lunges to point-blank with a scream and you lose. After
-  a hunt resolves there's a long cooldown, so it stays an occasional spike of dread,
-  not a constant chase.
+  green beacon column. Step onto it to escape and win.
+- **Wayfinding (guides without trivializing):**
+  - A **teal breadcrumb trail** glows on the floor along the open street grid toward
+    the exit, but only the next ~14 cells light up (fading at the far end), and it
+    **goes dark while you're being hunted** — you get "which way now," not the whole
+    solution.
+  - A soft **green sky-beam** rises above the exit, drawn over the walls, readable
+    from a distance and brighter as you approach — long-range orientation only.
+  - A minimal HUD (top-left) shows distance + rough heading as a backup.
+  - The exit is 40+ tiles away through the maze; difficulty is *surviving the walk*,
+    not solving a labyrinth.
+- **The stalker:** an entity that is never quite there — it appears at the edges,
+  creeps closer while you're not looking, and **vanishes the instant you face it**,
+  then reappears elsewhere. If it reaches you unseen it lunges into a full hunt. (A
+  short grace period at the start of each run lets you get your bearings first.)
+- **The hunt:** triggered by the stalker closing in, or by walking in a straight line
+  too long. A red warning closes in with a countdown — keep **changing direction** to
+  accumulate enough turning and shake it. If the countdown runs out it lunges to
+  point-blank with a scream and you lose.
 - **Pause / restart:** `Esc` opens a pause menu (Resume / Restart Run) showing time
   survived and distance walked. Win and lose both show an end screen with stats and a
   Play Again button. **Every restart generates a brand-new maze** (fresh seed, new
