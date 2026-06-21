@@ -1211,14 +1211,20 @@ function huntThreshold(){
   // changing direction. escalation() (~1 early, ~6.7 late) shortens it further.
   return Math.max(6, 12 - escalation()*2);
 }
-function startHunt(){
+function startHunt(origin){
   huntActive = true;
   huntTimeLeft = 7.5;
   huntTurnAccum = 0;
   huntTurnNeeded = 2.4; // ~140 degrees of cumulative turning to lose it
-  // spawn behind the player so turning around reveals it
-  const a = player.angle + Math.PI;
-  huntEntity = { x: player.x + Math.cos(a)*5.5, y: player.y + Math.sin(a)*5.5 };
+  if (origin){
+    // contact hunt: the hunter takes over exactly where the stalker was, so it
+    // never looks like the thing you walked toward just vanished
+    huntEntity = { x: origin.x, y: origin.y };
+  } else {
+    // ambient hunt: spawn behind the player so turning around reveals it
+    const a = player.angle + Math.PI;
+    huntEntity = { x: player.x + Math.cos(a)*5.5, y: player.y + Math.sin(a)*5.5 };
+  }
   straightWalkTimer = 0;
   huntWarnEl.classList.add('on');
   huntTextEl.textContent = "SOMETHING'S COMING — CHANGE DIRECTION";
@@ -1308,9 +1314,10 @@ function updateStalker(dt){
   // making contact ALWAYS lunges into a full hunt — approaching it is the worst move,
   // never a free dismiss, even right after a previous hunt
   if (d<2.6){
+    const origin = {x:stalker.x, y:stalker.y};
     stalker=null;
     huntCooldownUntil = 0;   // contact overrides the hunt cooldown
-    startHunt();
+    startHunt(origin);       // hunter continues from where the stalker stood
   }
 }
 function drawStalker(){
