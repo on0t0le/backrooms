@@ -336,6 +336,30 @@ let paused = false;   // freezes the sim while the pause menu is open
     }
   }catch(e){}
 })();
+function faceOpen(){
+  // turn to face an open neighbor so walking forward enters a corridor, not a wall
+  const cx=Math.floor(player.x), cy=Math.floor(player.y);
+  const dirs=[[1,0,0],[0,1,Math.PI/2],[-1,0,Math.PI],[0,-1,-Math.PI/2]];
+  for (const [dx,dy,a] of dirs){ if (!cellIsWall(cx+dx,cy+dy)){ player.angle=a; return; } }
+}
+function ensureOpenSpawn(){
+  // never let the player start buried in a wall — the procedural maze can wall the
+  // default spawn cell for some seeds. Streets (gx%8==0 || gy%8==0) are always open,
+  // so a nearby cell is guaranteed; relocate to the nearest one and face a corridor.
+  if (!cellIsWall(Math.floor(player.x), Math.floor(player.y))) return; // already clear
+  const sx=Math.floor(player.x), sy=Math.floor(player.y);
+  let best=null, bestD=Infinity;
+  for (let r=1; r<=16 && !best; r++){
+    for (let dy=-r; dy<=r; dy++) for (let dx=-r; dx<=r; dx++){
+      const gx=sx+dx, gy=sy+dy;
+      if (cellIsWall(gx,gy)) continue;
+      const d=dx*dx+dy*dy; if (d<bestD){ bestD=d; best={gx,gy}; }
+    }
+  }
+  if (!best) best={gx:0,gy:0}; // origin intersection is always a street, always open
+  player.x=best.gx+0.5; player.y=best.gy+0.5;
+  faceOpen();
+}
 function saveGame(){
   if (runOver) return;
   try{ localStorage.setItem('backrooms_save', JSON.stringify({x:player.x,y:player.y,angle:player.angle})); }catch(e){}
@@ -446,6 +470,7 @@ startScreen.addEventListener('click', ()=>{
   startScreen.classList.add('hidden');
   gameStarted = true;
   runStartTime = performance.now();
+  ensureOpenSpawn();
   computeExitCell();
   computeTrail();
   screenCanvas.requestPointerLock();
@@ -468,6 +493,7 @@ function restartRun(){
   overrides.clear();
   lightStates.clear();
   player.x = 1.5; player.y = 1.5; player.angle = 0; player.flashlight = false;
+  ensureOpenSpawn();
   distanceWalked = 0;
   caught = false; escaped = false; runOver = false; paused = false;
   runStartTime = performance.now();
